@@ -1,0 +1,7 @@
+anthropic
+beautifulsoup4
+flask
+pymupdf
+weasyprint
+openpyxl
+gunicorn

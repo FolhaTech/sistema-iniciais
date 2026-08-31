@@ -1,0 +1,29 @@
+# Segredos e configuração local (use .env.example como modelo)
+.env
+
+# Dados reais de clientes -- NUNCA versionar (petições geradas, uploads
+# temporários, arquivos soltos na raiz que continham dados de clientes reais
+# verificados manualmente antes deste .gitignore existir)
+Peticoes Geradas/
+_uploads/
+_tjsp_debug.log
+Modelo petição inicial reparadoras (2).pdf
+Planilha Demonstrativa Despesas - Justica Gratuita 1.xlsx
+Petição Inicial - STEFANIE DA SILVA ALMEIDA 2.pdf
+
+# Material de referência interno do escritório, não usado pelo app (fica só local)
+MODELO ATUALIZADO DA JUSTIÇA GRATUITA - att - MENOR - kns + TRAMITAÇÃO PRIORITARIA.docx
+TOPICO DO DIREITO - AÇÃO DE PLANO DE AUTOGESTÃO.docx
+
+# Estado interno do Claude Code, nao faz parte do projeto
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editores / SO
+.vscode/
+.DS_Store
+Thumbs.db

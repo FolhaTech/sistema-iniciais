@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.env.example
+.venv
+__pycache__
+*.pyc
+_uploads
+Peticoes Geradas
+_tjsp_debug.log
+*.bat
+COMO_USAR.txt
+DEPLOY.md

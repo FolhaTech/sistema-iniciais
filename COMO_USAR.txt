@@ -1,0 +1,179 @@
+COMO USAR — Preenchimento automático da petição inicial
+==========================================================
+
+O QUE ISSO FAZ
+---------------
+Lê todos os PDFs/imagens de uma pasta de cliente (RG, CNH, comprovante de
+residência, carteirinha do plano, laudos médico e psicológico, e-mails/
+WhatsApp trocados com a operadora, declaração de pobreza etc.), manda para a
+IA da Anthropic (Claude Haiku) e usa o que ela encontrar para preencher
+automaticamente os campos amarelos do modelo
+"Modelo petição inicial reparadoras (2).html", gerando uma nova petição já
+preenchida para aquele cliente.
+
+O script NUNCA decide sozinho a comarca/vara nem os valores de honorários —
+isso continua manual. E o resultado sempre deve ser revisado antes de
+protocolar: campos não encontrados ficam sinalizados, e divergências entre
+documentos (ex.: CEP diferente em dois docs) aparecem no relatório final.
+
+PASSO 1 — Conseguir uma chave de API da Anthropic
+--------------------------------------------------
+1. Acesse https://console.anthropic.com/settings/keys
+2. Crie uma conta (se ainda não tiver) e adicione um método de pagamento —
+   é cobrado por uso, bem barato para esse tipo de tarefa (Claude Haiku).
+3. Clique em "Create Key" e copie a chave (começa com "sk-ant-...").
+   Guarde em local seguro — ela não aparece de novo depois.
+
+PASSO 2 — Configurar a chave no Windows (uma vez só)
+------------------------------------------------------
+Abra o PowerShell e rode (trocando pela sua chave real):
+
+    setx ANTHROPIC_API_KEY "sk-ant-sua-chave-aqui"
+
+Feche e abra o PowerShell/terminal de novo depois disso (o setx só tem
+efeito em janelas novas).
+
+OPCIONAL — Conectar a uma pasta do SharePoint
+------------------------------------------------
+Por padrão você faz upload da pasta do cliente manualmente (Opção A abaixo).
+Se os documentos já ficam numa pasta do SharePoint (uma pasta raiz, com uma
+subpasta por cliente), dá para o sistema ler direto de lá, sem upload. Isso
+é opcional — sem essa configuração, o upload manual continua funcionando
+normalmente.
+
+Requer acesso de ADMINISTRADOR do Microsoft 365/Azure AD. Passo a passo:
+
+1. No portal do Azure (portal.azure.com) → "Microsoft Entra ID" →
+   "Registros de aplicativo" → "Novo registro". Nome: "Sistema Iniciais"
+   (ou o que preferir). Tipo de conta: só esta organização. Registrar.
+
+2. No app criado → "Certificados e segredos" → "Novo segredo do cliente".
+   Copie o VALOR do segredo na hora — ele some depois de sair da página.
+
+3. No mesmo app → "Permissões de API" → "Adicionar uma permissão" →
+   "Microsoft Graph" → "Permissões de aplicativo" → procure e marque
+   "Sites.Selected" → Adicionar. Depois clique em "Conceder consentimento
+   do administrador" e confirme.
+
+4. Anote (vai usar no passo 6): o "Id do aplicativo (cliente)" e o "Id do
+   diretório (locatário)", visíveis na página "Visão geral" do app, e o
+   segredo copiado no passo 2.
+
+5. Autorizar o app a ler o site específico do SharePoint (não tem botão no
+   portal — é uma chamada única feita pelo Graph Explorer, um site da
+   própria Microsoft: https://developer.microsoft.com/graph/graph-explorer
+   — faça login com sua conta de administrador):
+
+   a) Rode uma consulta GET para descobrir o Id do site (troque o hostname
+      e o caminho pelos do seu SharePoint, ex: contoso.sharepoint.com e
+      /sites/Juridico):
+
+        GET https://graph.microsoft.com/v1.0/sites/SEU-HOSTNAME.sharepoint.com:/sites/NOME-DO-SITE
+
+      Copie o valor do campo "id" da resposta (algo como
+      "contoso.sharepoint.com,GUID1,GUID2").
+
+   b) Rode uma consulta POST (troque {site-id} pelo id copiado acima e
+      {CLIENT_ID} pelo "Id do aplicativo" anotado no passo 4):
+
+        POST https://graph.microsoft.com/v1.0/sites/{site-id}/permissions
+
+      Corpo (cole em "Request body"):
+        {
+          "roles": ["read"],
+          "grantedToIdentities": [
+            { "application": { "id": "{CLIENT_ID}", "displayName": "Sistema Iniciais" } }
+          ]
+        }
+
+6. Edite o arquivo ".env" desta pasta (mesmo arquivo onde fica a
+   ANTHROPIC_API_KEY, formato CHAVE=valor) e adicione:
+
+        SHAREPOINT_TENANT_ID=id-do-diretorio-locatario
+        SHAREPOINT_CLIENT_ID=id-do-aplicativo-cliente
+        SHAREPOINT_CLIENT_SECRET=o-segredo-copiado-no-passo-2
+        SHAREPOINT_HOSTNAME=seu-hostname.sharepoint.com
+        SHAREPOINT_SITE_PATH=/sites/NomeDoSite
+        SHAREPOINT_ROOT_FOLDER=Documentos Partilhados/Clientes
+
+   (SHAREPOINT_ROOT_FOLDER é o caminho, dentro da biblioteca de documentos
+   do site, da pasta que contém as subpastas de cliente.)
+
+7. Reinicie o sistema (feche e abra de novo o "iniciar_sistema.bat"). Na
+   tela, vai aparecer a opção "Selecionar pasta do SharePoint" ao lado de
+   "Enviar arquivos", com um menu listando as pastas de cliente encontradas.
+
+PASSO 3 — Rodar
+-----------------
+Opção A — sistema web (recomendado, mais fácil):
+  Dê duplo clique em "iniciar_sistema.bat". Uma janela preta abre (é o
+  servidor rodando — não feche) e o navegador abre sozinho em
+  http://127.0.0.1:5000. Lá, escolha a origem dos documentos: "Enviar
+  arquivos" (clique em "Escolher Arquivos" e selecione a PASTA do cliente
+  inteira — o seletor do Windows permite escolher uma pasta) ou, se
+  configurado, "Selecionar pasta do SharePoint" (escolha o cliente no
+  menu). Depois clique em "Processar e gerar petição". A petição preenchida
+  aparece direto na tela do navegador — use Ctrl+S para salvar onde
+  quiser, ou já mande direto para "🖨️ Gerar PDF".
+  Para desligar o sistema, feche a janela preta.
+
+  O botão "🖨️ Gerar PDF" gera o PDF final pelo próprio servidor, com as
+  Referências (as citações [1][2][3] dos estudos sobre obesidade)
+  aparecendo como nota de rodapé na página exata onde são citadas, acima
+  do timbrado, em vez de agrupadas no fim do texto. Esse botão só funciona
+  com o sistema web rodando (Opção A) — nas Opções B/C ele não tem efeito
+  (nessas, use o Ctrl+P do navegador para imprimir/salvar, sem as notas de
+  rodapé).
+
+Opção B — clique duplo em linha de comando:
+  Dê duplo clique em "preencher_peticao.bat" e arraste a pasta do cliente
+  para a janela que abrir, ou digite/cole o caminho da pasta e aperte Enter.
+
+Opção C — pelo terminal:
+  cd "Sistema Iniciais"
+  .venv\Scripts\python.exe preencher_peticao.py "C:\caminho\para\pasta do cliente"
+
+  Para só ver quais arquivos/lotes seriam enviados, sem gastar nada:
+  .venv\Scripts\python.exe preencher_peticao.py "C:\caminho\da\pasta" --dry-run
+
+RESULTADO
+----------
+- Sistema web (Opção A): a petição preenchida aparece na tela e também é
+  salva em "Sistema Iniciais\Peticoes Geradas\".
+- Opções B/C: um arquivo "Petição Inicial - <nome da pasta>.html" é criado
+  dentro da própria pasta do cliente.
+
+Em todos os casos: abra a petição no navegador, os campos preenchidos pela
+IA continuam clicáveis/editáveis (fundo amarelo), há um aviso amarelo no
+topo listando o que não foi encontrado e eventuais divergências entre
+documentos — revise tudo isso, corrija o que precisar, confira a
+comarca/vara e os checkboxes do topo, e use "🖨️ Gerar PDF".
+
+CUSTO ESTIMADO
+---------------
+Usa o modelo Claude Haiku (o mais barato). Uma pasta de cliente típica
+(20-30 documentos) custa poucos centavos de dólar por execução.
+
+SE ALGO DER ERRADO
+--------------------
+- "ANTHROPIC_API_KEY não configurada": repita o Passo 2 e abra um terminal
+  novo.
+- Erro de autenticação da API: a chave pode estar errada ou sem crédito —
+  confira em console.anthropic.com.
+- Algum documento não é PDF/PNG/JPG/XLSX: o script ignora arquivos de
+  outro tipo (Word etc.) — converta para PDF antes, se precisar que ele
+  leia. Planilhas .xlsx (ex: a planilha de despesas da gratuidade) são
+  convertidas automaticamente em imagem — não precisa converter à mão.
+- Se a extração vier incompleta ou errada em algum campo, edite direto no
+  HTML gerado (campos amarelos são editáveis) — a IA é um ponto de partida,
+  não substitui a revisão do advogado.
+- "Selecionar pasta do SharePoint" aparece cinza/desabilitado: passe o
+  mouse sobre a opção — o aviso diz qual variável falta no .env. Revise o
+  passo "OPCIONAL — Conectar a uma pasta do SharePoint" acima.
+- Erro "HTTP 403" ao listar/baixar pastas do SharePoint: o app não tem
+  permissão nesse site — repita o passo 5 (conceder acesso via Graph
+  Explorer) conferindo se usou o Id de site e o Id de aplicativo certos.
+- "Pasta do cliente não encontrada no SharePoint": confira se o nome da
+  pasta em SHAREPOINT_ROOT_FOLDER está exatamente igual ao do SharePoint
+  (maiúsculas/minúsculas e acentos não importam, mas o caminho precisa
+  existir).

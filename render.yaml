@@ -1,0 +1,35 @@
+# Blueprint do Render (render.com) -- ao conectar este repositório em
+# "New +" -> "Blueprint" no painel do Render, ele lê este arquivo e já
+# propõe o serviço configurado; só falta preencher os valores marcados
+# como "sync: false" (segredos, nunca ficam neste arquivo nem no Git).
+services:
+  - type: web
+    name: sistema-iniciais
+    runtime: docker
+    plan: free # troque para "starter" se enfrentar "cold start" (app dorme
+      # após 15 min sem uso no plano free -- a próxima requisição demora a
+      # acordar, o que pode somar com o tempo de processamento e estourar
+      # timeout) -- ver DEPLOY.md.
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_ENV
+        value: production
+      - key: SHAREPOINT_TENANT_ID
+        sync: false
+      - key: SHAREPOINT_CLIENT_ID
+        sync: false
+      - key: SHAREPOINT_CLIENT_SECRET
+        sync: false
+      - key: SHAREPOINT_HOSTNAME
+        sync: false
+      - key: SHAREPOINT_SITE_PATH
+        sync: false
+      - key: SHAREPOINT_ROOT_FOLDER
+        sync: false

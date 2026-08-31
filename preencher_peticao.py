@@ -127,7 +127,11 @@ def _load_municipios_sp():
     return result
 
 
-_TJSP_DEBUG_LOG = SCRIPT_DIR / "_tjsp_debug.log"
+# Em hospedagem serverless (Vercel seta VERCEL=1) o disco do deploy e
+# somente leitura -- so /tmp aceita escrita. Sem isso o log so falharia
+# silenciosamente (_log_tjsp engole a excecao), o que ja seria inofensivo,
+# mas em /tmp ele de fato funciona pra ajudar a diagnosticar algo no ar.
+_TJSP_DEBUG_LOG = (Path("/tmp") if os.environ.get("VERCEL") else SCRIPT_DIR) / "_tjsp_debug.log"
 
 
 def _log_tjsp(msg):
@@ -858,29 +862,40 @@ def _planilha_para_html(ws):
             celulas.append(f'<td style="{estilo}">{texto}</td>')
         linhas_html.append("<tr>" + "".join(celulas) + "</tr>")
     corpo = "".join(linhas_html)
-    return (
-        '<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
-        "@page{size:A4 landscape; margin:10mm;}"
-        "body{font-family:Arial,Helvetica,sans-serif; font-size:10pt;}"
-        "table{border-collapse:collapse; width:100%;}"
-        "td{border:1px solid #999; padding:4px 8px; vertical-align:top;}"
-        f"</style></head><body><table>{corpo}</table></body></html>"
-    )
+    return f"<table>{corpo}</table>"
+
+
+_PLANILHA_CSS = """
+body{font-family:Arial,Helvetica,sans-serif; font-size:10pt;}
+table{border-collapse:collapse; width:100%;}
+td{border:0.75pt solid #999; padding:4px 8px; vertical-align:top;}
+"""
 
 
 def _planilha_para_png_bytes(xlsx_path: Path):
+    """Renderiza a 1a aba da planilha como imagem (motor PyMuPDF, sem
+    WeasyPrint -- mesmo motivo da geracao do PDF final, ver
+    render_pdf_with_footnotes): cria uma pagina A4 paisagem e desenha a
+    tabela nela. Assume que a planilha cabe numa pagina (uso real: poucas
+    linhas, ex. planilha de despesas da gratuidade) -- se um dia sobrar
+    conteudo, o excesso e cortado (page.insert_htmlbox devolve o texto que
+    nao coube, mas nao ha pra onde mandar numa unica imagem)."""
     import openpyxl
     import pymupdf
-    from weasyprint import HTML
 
     wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)
     ws = wb.worksheets[0]  # so a primeira aba -- abas extras (ex: "Como
     # preencher") sao instrucoes, nao dado da cliente, e ficam de fora.
-    pagina_html = _planilha_para_html(ws)
-    pdf_bytes = HTML(string=pagina_html).write_pdf()
-    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    tabela_html = _planilha_para_html(ws)
+
+    largura, altura = _PDF_PAGE_H_PT, _PDF_PAGE_W_PT  # A4 paisagem = A4 com W/H trocados
+    margem = 10 * 72 / 25.4  # 10mm em pontos
+    doc = pymupdf.open()
     try:
-        pix = doc.load_page(0).get_pixmap(matrix=pymupdf.Matrix(2, 2))
+        page = doc.new_page(width=largura, height=altura)
+        rect = pymupdf.Rect(margem, margem, largura - margem, altura - margem)
+        page.insert_htmlbox(rect, tabela_html, css=_PLANILHA_CSS)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
         return pix.tobytes("png")
     finally:
         doc.close()
@@ -1594,122 +1609,254 @@ def _insert_doc_photos(soup, data, files):
     return filled, skipped
 
 
-# CSS injetado apenas no PDF final (via WeasyPrint) para transformar as
-# referencias numeradas em notas de rodape reais por pagina. Nao entra no
-# HTML editavel do navegador -- la elas continuam como bloco unico no fim do
-# texto, pois `float:footnote` nao tem suporte em Chrome/Edge/Firefox.
-_FOOTNOTE_PDF_CSS = """
-<style>
-  .toolbar{display:none !important;}
-  .fn-note{float:footnote;}
-  .fn-note, .fn-note a{font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:#666;}
-  .fn-note a{color:#2b5fa3;}
-  ::footnote-marker{content:counter(footnote) ". "; font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:#666;}
-  ::footnote-call{content:counter(footnote); vertical-align:super; font-size:0.7em; color:#2b5fa3;}
-  @page{
-    @footnote{border-top:0.5pt solid #bbb; margin-top:0.5em; padding-top:0.4em;}
-  }
-</style>
+# ---------------------------------------------------------------------------
+# Geracao do PDF final -- motor proprio em PyMuPDF, sem WeasyPrint. Antes
+# usava CSS Paged Media avancado (float:footnote, position:running()) que
+# so o WeasyPrint suporta bem, e que por sua vez depende de bibliotecas
+# nativas de sistema (Pango/Cairo) indisponiveis em hospedagem serverless
+# (Vercel). Aqui a mesma logica -- nota de rodape real na pagina exata da
+# citacao, com timbrado repetindo em toda pagina -- e reimplementada em
+# Python puro sobre PyMuPDF (pymupdf.Story), que ja e dependencia do
+# projeto e nao precisa de nada alem do proprio pacote pip.
+#
+# Como o motor HTML do PyMuPDF nao tem um algoritmo de nota de rodape
+# embutido (nenhum, alem do WeasyPrint/Prince, tem), a posicao de cada
+# nota e calculada aqui: o corpo e "fluido" pagina a pagina reservando uma
+# altura de rodape por pagina, comeca em zero e vai ajustando por
+# convergencia (poucas iteracoes bastam, ja que o numero de notas costuma
+# ser pequeno) ate a altura reservada bater com o que as notas realmente
+# citadas naquela pagina precisam.
+# ---------------------------------------------------------------------------
+_PDF_PAGE_W_PT = 210 * 72 / 25.4  # largura A4 em pontos
+_PDF_PAGE_H_PT = 297 * 72 / 25.4  # altura A4 em pontos
+_PDF_SIDE_MARGIN_PT = 65 * 72 / 96  # padding lateral de main.petition (65px CSS) em pontos
+
+_PDF_BODY_CSS = """
+main{padding:0; line-height:1.15; font-size:13pt; font-family:Cambria,'Times New Roman',Georgia,serif; text-align:justify;}
+main p{margin:0 0 12px 0; text-indent:4.75cm;}
+main p.noindent{text-indent:0;}
+h2.title{text-align:center; font-size:13pt; line-height:1.15; margin:26px 0; text-indent:0; font-weight:bold;}
+h3.sec{font-size:13pt; line-height:1.15; text-indent:0; margin:26px 0 14px 0; font-weight:bold;}
+h4.subsec{font-size:13pt; line-height:1.15; text-indent:0; margin:20px 0 12px 0; font-weight:bold;}
+.cond-badge{font-family:Arial,Helvetica,sans-serif; font-size:9pt; color:#7a2432;}
+blockquote.quote{margin:0; margin-left:5cm; font-size:11pt; line-height:1.15; text-indent:0; color:#222;}
+blockquote.quote cite{display:block; margin-top:6px; font-style:normal; font-size:11pt;}
+sup a{color:#2b5fa3; text-decoration:none; font-size:0.75em;}
+.doc-photo{margin:10px 0 18px 0; text-align:center;}
+.doc-photo img{max-width:60%; height:auto; border:1px solid #bbb;}
+.doc-photo-caption{font-family:Arial,Helvetica,sans-serif; font-size:9pt; color:#666; margin:4px 0 0 0; text-indent:0;}
+table.docrow{width:100%; border-collapse:collapse; margin:10px 0 18px 0;}
+table.docrow td{text-align:center; vertical-align:top; padding:0 6px;}
+table.docrow img{max-width:100%; height:auto; border:1px solid #bbb;}
 """
 
+_PDF_FOOTNOTE_CSS = """
+div.fn{font-size:9.5pt; color:#444; margin:0 0 4px 0; text-indent:0; font-family:Cambria,'Times New Roman',Georgia,serif;}
+div.fn a{color:#2b5fa3;}
+"""
 
-def _mover_rodape_para_running_element(soup):
-    """Move a imagem do timbrado de rodape (que hoje repete em toda pagina
-    via <tfoot> da tabela) para um "running element" de pagina do
-    WeasyPrint. Necessario porque a area de nota de rodape do WeasyPrint e
-    sempre inserida DEPOIS do conteudo normal da pagina (inclusive depois
-    do tfoot da tabela) -- com o timbrado ainda no tfoot, a nota sempre
-    aparecia ABAIXO dele. Como running element, o timbrado fica numa area
-    de margem fixa, sempre por ultimo, resolvendo a ordem (nota em cima,
-    timbrado embaixo). Devolve a altura em mm que a imagem ocupa em largura
-    total de pagina A4 (pra reservar a margem inferior certa), ou None se
-    nao achou a imagem."""
-    img = soup.find("img", class_="brand-footer-img")
-    if img is None:
-        return None
-    tfoot = img.find_parent("tfoot")
+_PDF_MAX_PAGINAS = 300  # trava de seguranca contra loop infinito em HTML malformado
+_PDF_MAX_ITERACOES_RODAPE = 4
+
+
+def _pdf_img_size(data_uri):
+    """(largura, altura) em px de uma imagem data:URI, ou None se falhar."""
     try:
         import io
         from PIL import Image
-        b64 = img["src"].split(",", 1)[1]
-        with Image.open(io.BytesIO(base64.b64decode(b64))) as im:
-            largura, altura = im.size
-        altura_mm = round(210 * (altura / largura), 1)
+        raw = base64.b64decode(data_uri.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as im:
+            return im.size
     except Exception:
-        altura_mm = 32.0  # fallback razoavel se a leitura da imagem falhar
-
-    div = soup.new_tag("div")
-    div["id"] = "rodape-timbrado"
-    img.extract()
-    div.append(img)
-    body = soup.find("body")
-    if body is not None:
-        body.insert(0, div)
-    else:
-        soup.append(div)
-    if tfoot is not None:
-        tfoot.decompose()
-    return altura_mm
+        return None
 
 
-def _convert_endnotes_to_footnotes(soup):
-    """Move o conteudo de cada <p class="fn" id="notaN"> (hoje agrupado em
-    <div class="endnotes"> no fim do texto) para dentro de um <span
-    class="fn-note"> no proprio ponto onde a citacao <sup><a href="#notaN">
-    aparece, marcado com float:footnote. O WeasyPrint entao renderiza a nota
-    no rodape da pagina onde a citacao realmente caiu, com numeracao
-    automatica -- por isso o "N. " que abre cada nota original e removido
-    aqui.
-    """
-    endnotes = soup.find("div", class_="endnotes")
-    if endnotes is None:
-        return
-    notes_by_id = {p["id"]: p for p in endnotes.find_all("p", class_="fn", id=True)}
-
-    for a in soup.find_all("a", href=re.compile(r"^#nota\d+$")):
-        note_p = notes_by_id.get(a["href"].lstrip("#"))
-        if note_p is None:
+def _pdf_agrupar_doc_photos_em_tabela(soup):
+    """Converte cada <div class="doc-photos-row"> (que no navegador usa
+    display:flex, sem suporte no motor HTML do PyMuPDF) numa <table>
+    equivalente, uma coluna por doc-photo, pra manter as imagens lado a
+    lado no PDF em vez de empilhadas."""
+    for row in soup.find_all("div", class_="doc-photos-row"):
+        fotos = [f for f in row.find_all("div", class_="doc-photo", recursive=False) if f.find("img")]
+        if not fotos:
+            row.decompose()
             continue
-        inner_html = re.sub(r"^\s*\d+\.\s*", "", note_p.decode_contents(), count=1)
-        span = soup.new_tag("span")
-        span["class"] = "fn-note"
-        for node in list(BeautifulSoup(inner_html, "html.parser").contents):
-            span.append(node.extract())
-        (a.find_parent("sup") or a).replace_with(span)
+        table = soup.new_tag("table")
+        table["class"] = "docrow"
+        tr = soup.new_tag("tr")
+        largura = f"{100 // len(fotos)}%"
+        for foto in fotos:
+            td = soup.new_tag("td")
+            td["style"] = f"width:{largura};"
+            td.append(foto.extract())
+            tr.append(td)
+        table.append(tr)
+        row.replace_with(table)
 
-    endnotes.decompose()
+
+def _pdf_flow_body(body_html, nota_id_por_marca, alturas_rodape_por_pagina, header_h, footer_h):
+    """Flui o corpo (pymupdf.Story) pagina a pagina, entre o cabecalho e o
+    rodape (header_h/footer_h) e reservando em cada pagina a altura de nota
+    de rodape informada em alturas_rodape_por_pagina (paginas sem entrada
+    usam 0). Devolve (rects, citas_por_pagina): os retangulos de conteudo
+    usados em cada pagina, e um dict pagina->set de ids de nota cujas
+    citacoes calharam naquela pagina."""
+    import io
+    import pymupdf
+
+    story = pymupdf.Story(html=body_html, user_css=_PDF_BODY_CSS)
+    citas_por_pagina = {}
+
+    def registrar(pos):
+        # open_close: 1/2 = abre/fecha (elementos de bloco, cada um vira um
+        # evento separado); 3 = elemento inline reportado de uma vez so (e
+        # o caso do <sup> da citacao) -- aceitar qualquer valor e simples e
+        # seguro aqui porque so estamos ADICIONANDO a um set (duplicata na
+        # mesma pagina nao muda nada).
+        if pos.id in nota_id_por_marca:
+            citas_por_pagina.setdefault(pos.page_num, set()).add(nota_id_por_marca[pos.id])
+
+    # place() so calcula a proposta de layout -- e draw() que "confirma" o
+    # conteudo daquela pagina e avanca o fluxo pra proxima; sem chamar
+    # draw() aqui (mesmo sem precisar do pixel final), place() ficaria
+    # sempre devolvendo a mesma pagina. Desenha num DocumentWriter
+    # descartavel so por isso -- cabecalho/rodape/notas ficam de fora
+    # dessa passada de medicao, so entram na passada final (ja com a
+    # altura de rodape convergida).
+    buf_descartavel = io.BytesIO()
+    writer_descartavel = pymupdf.DocumentWriter(buf_descartavel)
+    mediabox = pymupdf.Rect(0, 0, _PDF_PAGE_W_PT, _PDF_PAGE_H_PT)
+
+    rects = []
+    page_num = 0
+    more = 1
+    while more:
+        base = _PDF_PAGE_H_PT - footer_h - alturas_rodape_por_pagina.get(page_num, 0.0)
+        rect = pymupdf.Rect(_PDF_SIDE_MARGIN_PT, header_h, _PDF_PAGE_W_PT - _PDF_SIDE_MARGIN_PT, base)
+        dev = writer_descartavel.begin_page(mediabox)
+        more, _ = story.place(rect)
+        story.draw(dev)
+        writer_descartavel.end_page()
+        story.element_positions(registrar, {"page_num": page_num})
+        rects.append(rect)
+        page_num += 1
+        if page_num > _PDF_MAX_PAGINAS:
+            raise RuntimeError("Petição com número anormal de páginas -- abortando geração de PDF.")
+    writer_descartavel.close()
+    return rects, citas_por_pagina
+
+
+def _pdf_altura_notas(notes_html, ids_notas, largura):
+    """Altura (pt) necessaria pra caber o texto das notas dadas na largura
+    informada, medida de verdade com Story.fit_height (nao e um chute)."""
+    import pymupdf
+
+    if not ids_notas:
+        return 0.0
+    html = "".join(notes_html[nid] for nid in ids_notas)
+    story = pymupdf.Story(html=html, user_css=_PDF_FOOTNOTE_CSS)
+    resultado = story.fit_height(largura, height_min=5, height_max=_PDF_PAGE_H_PT)
+    return resultado.rect.height + 6  # respiro entre o corpo e a nota
 
 
 def render_pdf_with_footnotes(html_content: str) -> bytes:
     """Gera o PDF final a partir do HTML ja preenchido/editado (recebido tal
     como esta na tela, com os campos preenchidos e as condicoes marcadas),
-    com as referencias como notas de rodape reais por pagina. Usa WeasyPrint
-    porque nenhum navegador suporta `float:footnote` de forma confiavel.
-    """
-    from weasyprint import HTML
+    com as referencias como notas de rodape reais na pagina onde a citacao
+    caiu, e o timbrado (cabecalho/rodape) repetindo em toda pagina."""
+    import io
+    import pymupdf
 
     soup = BeautifulSoup(html_content, "html.parser")
     toolbar = soup.find("div", class_="toolbar")
     if toolbar is not None:
         toolbar.decompose()
-    _convert_endnotes_to_footnotes(soup)
-    altura_rodape_mm = _mover_rodape_para_running_element(soup)
-    head = soup.find("head")
-    if head is not None:
-        head.append(BeautifulSoup(_FOOTNOTE_PDF_CSS, "html.parser"))
-        if altura_rodape_mm is not None:
-            css_rodape = f"""
-<style>
-  #rodape-timbrado{{position:running(rodape-timbrado); margin:0;}}
-  #rodape-timbrado img{{display:block; width:100%; height:auto;}}
-  @page{{
-    margin:0 0 {altura_rodape_mm}mm 0;
-    @bottom-center{{content:element(rodape-timbrado); margin:0; padding:0; width:100%;}}
-  }}
-</style>
-"""
-            head.append(BeautifulSoup(css_rodape, "html.parser"))
-    return HTML(string=str(soup)).write_pdf()
+
+    thead_img = soup.select_one("thead img")
+    tfoot_img = soup.select_one("tfoot img")
+    header_src = thead_img["src"] if thead_img and thead_img.get("src") else None
+    footer_src = tfoot_img["src"] if tfoot_img and tfoot_img.get("src") else None
+    header_size = _pdf_img_size(header_src) if header_src else None
+    footer_size = _pdf_img_size(footer_src) if footer_src else None
+    header_h = _PDF_PAGE_W_PT * (header_size[1] / header_size[0]) if header_size else 0.0
+    footer_h = _PDF_PAGE_W_PT * (footer_size[1] / footer_size[0]) if footer_size else 0.0
+
+    # notas de rodape: guarda o texto de cada <p class="fn" id="notaN"> (ja
+    # vem com o "N. " no inicio, escrito no proprio modelo) e tira o bloco
+    # de endnotes do corpo -- cada nota e desenhada a parte, na pagina certa.
+    notes_html = {}
+    endnotes = soup.find("div", class_="endnotes")
+    if endnotes is not None:
+        for p in endnotes.find_all("p", class_="fn", id=True):
+            notes_html[p["id"]] = f'<div class="fn">{p.decode_contents()}</div>'
+        endnotes.decompose()
+
+    # marca cada citacao com um id rastreavel, pra saber em qual pagina ela
+    # caiu depois de fluir o corpo (ver _pdf_flow_body/element_positions)
+    nota_id_por_marca = {}
+    for i, a in enumerate(soup.find_all("a", href=re.compile(r"^#nota\d+$"))):
+        nota_id = a["href"].lstrip("#")
+        if nota_id not in notes_html:
+            continue
+        marca = f"__cite_{nota_id}_{i}"
+        (a.find_parent("sup") or a)["id"] = marca
+        nota_id_por_marca[marca] = nota_id
+
+    main = soup.find("main", class_="petition") or soup.find("main")
+    if main is None:
+        raise ValueError('Modelo sem <main class="petition"> -- não é possível gerar o PDF.')
+    _pdf_agrupar_doc_photos_em_tabela(main)
+    body_html = str(main)
+
+    largura_conteudo = _PDF_PAGE_W_PT - 2 * _PDF_SIDE_MARGIN_PT
+    alturas = {}
+    for _ in range(_PDF_MAX_ITERACOES_RODAPE):
+        rects, citas_por_pagina = _pdf_flow_body(body_html, nota_id_por_marca, alturas, header_h, footer_h)
+        novas_alturas = {
+            pn: _pdf_altura_notas(notes_html, sorted(notas), largura_conteudo)
+            for pn, notas in citas_por_pagina.items()
+        }
+        if novas_alturas == alturas:
+            break
+        alturas = novas_alturas
+    # rects/citas_por_pagina refletem a ultima iteracao (convergida, ou a
+    # ultima tentativa se o limite de iteracoes foi atingido -- na pratica,
+    # com poucas notas por documento, converge nas 2 primeiras)
+
+    body_story = pymupdf.Story(html=body_html, user_css=_PDF_BODY_CSS)
+    _IMG_CSS = "img{width:100%; display:block;}"
+
+    buf = io.BytesIO()
+    writer = pymupdf.DocumentWriter(buf)
+    mediabox = pymupdf.Rect(0, 0, _PDF_PAGE_W_PT, _PDF_PAGE_H_PT)
+    for page_num, rect in enumerate(rects):
+        dev = writer.begin_page(mediabox)
+        # cabecalho/rodape sao uma Story NOVA a cada pagina -- assim como o
+        # corpo, uma Story "consome" o que ja foi desenhado a cada
+        # place()+draw(); reaproveitar a mesma instancia faria a imagem
+        # aparecer só na primeira pagina e sumir nas seguintes.
+        if header_src:
+            header_story = pymupdf.Story(html=f'<img src="{header_src}">', user_css=_IMG_CSS)
+            header_story.place(pymupdf.Rect(0, 0, _PDF_PAGE_W_PT, header_h))
+            header_story.draw(dev)
+        if footer_src:
+            footer_story = pymupdf.Story(html=f'<img src="{footer_src}">', user_css=_IMG_CSS)
+            footer_story.place(pymupdf.Rect(0, _PDF_PAGE_H_PT - footer_h, _PDF_PAGE_W_PT, _PDF_PAGE_H_PT))
+            footer_story.draw(dev)
+        body_story.place(rect)
+        body_story.draw(dev)
+        notas_pagina = sorted(citas_por_pagina.get(page_num, ()))
+        if notas_pagina:
+            nota_html = "".join(notes_html[nid] for nid in notas_pagina)
+            nota_story = pymupdf.Story(html=nota_html, user_css=_PDF_FOOTNOTE_CSS)
+            nota_rect = pymupdf.Rect(
+                _PDF_SIDE_MARGIN_PT, rect.y1, _PDF_PAGE_W_PT - _PDF_SIDE_MARGIN_PT, _PDF_PAGE_H_PT - footer_h
+            )
+            nota_story.place(nota_rect)
+            nota_story.draw(dev)
+        writer.end_page()
+    writer.close()
+    return buf.getvalue()
 
 
 # Quando um campo nao e encontrado, o span NAO fica intocado com o texto de

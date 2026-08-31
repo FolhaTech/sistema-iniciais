@@ -1,17 +1,10 @@
 FROM python:3.12-slim
 
-# Dependencias de sistema do weasyprint (geracao de PDF) -- sem essas libs
-# nativas (Pango/Cairo/GDK-Pixbuf) o import falha em runtime, nao em build.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libgdk-pixbuf-2.0-0 \
-    libcairo2 \
-    libffi8 \
-    shared-mime-info \
-    fonts-liberation \
-    fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
+# Sem dependencias de sistema pra instalar aqui -- a geracao de PDF usa
+# PyMuPDF (pymupdf.Story), que nao precisa de bibliotecas nativas externas
+# (ao contrario do WeasyPrint, que foi removido daqui exatamente por isso --
+# ver o comentario grande em cima de render_pdf_with_footnotes no
+# preencher_peticao.py).
 
 WORKDIR /app
 

@@ -1,75 +1,106 @@
-# Publicar o sistema na internet (Render)
+# Publicar o sistema na internet (Vercel)
 
-O app foi feito para rodar como um processo Flask tradicional (upload de
-pasta → processamento que pode levar minutos → geração de PDF com
-`weasyprint`, que precisa de bibliotecas nativas de sistema). Isso não
-encaixa bem no modelo do Vercel, que é voltado para funções serverless de
-execução curta e sem sistema de arquivos persistente. Por isso o deploy
-aqui é para o [Render](https://render.com), que roda o `Dockerfile` deste
-repositório como um serviço web comum, sem esse tipo de limitação.
+O repositório já tem tudo pronto para o Vercel: o Flask (`app.py`) é
+detectado automaticamente (zero-config), o `vercel.json` define o tempo
+máximo de execução, e a geração de PDF usa PyMuPDF em vez do WeasyPrint —
+sem bibliotecas nativas de sistema, o que funciona no ambiente serverless
+do Vercel (o WeasyPrint não funcionaria lá; essa foi a mudança de código
+feita especificamente para viabilizar esse deploy).
 
-O repositório já tem tudo pronto (`Dockerfile`, `render.yaml`,
-`.gitignore` protegendo dados de clientes e segredos). Faltam só os passos
-abaixo, que só podem ser feitos por quem tem acesso à conta:
+Faltam só os passos abaixo, que só podem ser feitos por quem tem acesso à
+conta:
 
-## 1. Criar conta / logar no Render
-https://dashboard.render.com — pode entrar direto com a conta do GitHub.
+## 1. Criar conta / logar no Vercel
+https://vercel.com — pode entrar direto com a conta do GitHub.
 
-## 2. Criar o serviço a partir do Blueprint
-1. No painel, clique em **New +** → **Blueprint**.
-2. Selecione o repositório GitHub deste projeto (autorize o Render a
-   acessar sua conta do GitHub se pedir).
-3. O Render lê o `render.yaml` e propõe o serviço `sistema-iniciais`
-   automaticamente. Confirme.
+## 2. Importar o repositório
+1. No painel, clique em **Add New...** → **Project**.
+2. Selecione o repositório `FolhaTech/sistema-iniciais` (autorize o
+   Vercel a acessar sua conta do GitHub se pedir).
+3. O Vercel detecta o Flask automaticamente (por causa do `app.py` na raiz
+   e do `vercel.json`) — não precisa mudar nenhuma configuração de build.
 
-## 3. Preencher os segredos
-O Render vai pedir para preencher as variáveis marcadas como secretas no
-`render.yaml` (elas nunca ficam no código):
+## 3. Preencher as variáveis de ambiente
+Antes de clicar em Deploy, na seção **Environment Variables**, adicione:
 
 - `ANTHROPIC_API_KEY` — a mesma chave usada localmente
   (console.anthropic.com/settings/keys).
-- `APP_USERNAME` / `APP_PASSWORD` — o login que vai proteger o app público.
-  **Escolha uma senha forte** — sem isso, qualquer pessoa com o link
-  poderia usar o sistema com documentos de terceiros e gastar sua chave da
-  Anthropic.
+- `APP_USERNAME` / `APP_PASSWORD` — o login que vai proteger o app
+  público. **Escolha uma senha forte** — sem isso, qualquer pessoa com o
+  link poderia usar o sistema com documentos de terceiros e gastar sua
+  chave da Anthropic.
+- `SECRET_KEY` — uma string aleatória longa (gere uma com
+  `python -c "import secrets; print(secrets.token_hex(32))"` no seu
+  computador e cole o resultado).
+- `APP_ENV` = `production`.
 - `SHAREPOINT_*` (opcional) — só preencha se for usar a integração com
   SharePoint; sem elas, o upload manual de pasta continua funcionando
   normalmente.
 
-`SECRET_KEY` é gerada automaticamente pelo Render (não precisa mexer).
+Essas variáveis nunca ficam no código nem no `vercel.json` — só existem
+dentro do painel do Vercel.
 
 ## 4. Deploy
-Clique em **Apply** / **Create**. O primeiro build demora alguns minutos
-(instala as dependências do sistema do weasyprint). Ao terminar, o Render
-mostra a URL pública (algo como `https://sistema-iniciais.onrender.com`).
+Clique em **Deploy**. Em 1-2 minutos o Vercel mostra a URL pública (algo
+como `https://sistema-iniciais.vercel.app`).
 
 ## 5. Testar
 Abra a URL, entre com o `APP_USERNAME`/`APP_PASSWORD` configurados, e rode
 um processamento de teste com uma pasta pequena antes de usar com um caso
-real.
+real -- inclusive o botão "Gerar PDF", pra confirmar que a nota de rodapé
+está caindo na página certa (a lógica foi reimplementada do zero pra essa
+migração; veja "O que mudou" abaixo).
+
+### Alternativa via linha de comando
+Se preferir não usar o painel: `npx vercel login` (abre o navegador pra
+autenticar) e depois `npx vercel --prod` dentro da pasta do projeto. As
+variáveis de ambiente do passo 3 ainda precisam ser configuradas (`npx
+vercel env add NOME_DA_VARIAVEL`) antes do deploy funcionar de verdade.
 
 ## Limitações importantes a observar
 
-- **Plano gratuito "dorme"**: sem uso por 15 minutos, o app hiberna; a
-  próxima requisição demora ~50s pra acordar, e isso soma com o tempo de
-  processamento normal (que já pode levar minutos) — na prática, o
-  primeiro processamento depois de um tempo parado pode estourar o tempo
-  limite. Se isso acontecer na prática, troque `plan: free` para
-  `plan: starter` no `render.yaml` (é pago, mas fica sempre ativo) e
-  faça um novo commit — o Render reaplica o blueprint automaticamente.
-- **Requisição síncrona longa**: o processamento roda direto na
-  requisição HTTP (sem fila em segundo plano). O `gunicorn` está
-  configurado com `--timeout 600` (10 min), mas alguns provedores também
-  aplicam um limite próprio no proxy de borda — se pastas muito grandes
-  derem timeout mesmo assim, me avise: dá pra mover o processamento para
-  segundo plano (ex: com polling), mas é uma mudança de arquitetura maior
-  que não valia a pena adiantar sem confirmar que é necessário.
-- **Disco efêmero**: qualquer arquivo salvo dentro do container (uploads
-  temporários, petições geradas) some a cada novo deploy/reinício. Isso já
-  é esperado para os uploads temporários (sempre apagados após o
-  processamento), mas significa que as **petições geradas não ficam
-  guardadas no servidor** — baixe/salve cada petição (botão "Gerar PDF" ou
-  Ctrl+S) assim que for gerada, ela não vai continuar disponível depois.
+- **Tempo de execução**: o `vercel.json` está com `maxDuration: 300`
+  (5 minutos, o teto do plano Hobby). Se pastas grandes de cliente (muitos
+  documentos, vários lotes) derem timeout, e você estiver no plano Pro,
+  pode subir esse valor para até 800 (ou 1800 em beta) editando
+  `vercel.json` e commitando de novo.
+- **Disco efêmero**: nada gravado no servidor persiste entre requisições
+  (é assim que o Vercel funciona). Isso já é esperado pros uploads
+  temporários (sempre apagados após o processamento), mas significa que as
+  **petições geradas não ficam guardadas no servidor** — baixe/salve cada
+  petição (botão "Gerar PDF" ou Ctrl+S) assim que for gerada.
 - **Custo da API**: como o app fica acessível na internet (ainda que atrás
   de login), monitore o uso em console.anthropic.com — cada processamento
   de pasta consome a chave configurada no servidor.
+
+## O que mudou no código pra viabilizar isso
+
+O sistema usava **WeasyPrint** pra gerar o PDF final (a versão com as
+referências como notas de rodapé reais, na página certa). O WeasyPrint
+depende de bibliotecas nativas de sistema (Pango/Cairo) que o ambiente
+serverless do Vercel não fornece — é um problema conhecido e sem solução
+simples nesse tipo de hospedagem.
+
+A geração de PDF foi reescrita em Python puro sobre o **PyMuPDF**
+(`pymupdf.Story`), que já era dependência do projeto e não tem nenhuma
+dependência nativa externa. A lógica de posicionar a nota de rodapé na
+página exata da citação — antes feita pelo motor de CSS avançado do
+WeasyPrint (`float:footnote`, `position:running()`) — foi refeita à mão:
+o corpo do texto é "fluído" página a página e a posição de cada citação é
+rastreada, com a altura reservada pra nota ajustada por algumas iterações
+até convergir. Testado localmente (inclusive dentro de um container Docker
+com disco somente-leitura, simulando o ambiente do Vercel) com um
+documento de várias páginas, múltiplas notas na mesma página e imagens de
+documentos lado a lado — tudo caiu no lugar certo. Ainda assim, **confira
+o PDF gerado num caso real antes de confiar cegamente** (passo 5 acima),
+como qualquer mudança desse tamanho merece.
+
+A mesma troca foi feita na conversão de planilha (.xlsx) pra imagem, que
+também usava WeasyPrint por baixo.
+
+## Alternativa: Render (Docker)
+
+O repositório também tem um `Dockerfile` e `render.yaml` funcionais, caso
+prefira uma hospedagem mais parecida com um servidor tradicional (sem os
+limites de tempo de execução do serverless) em vez do Vercel. Peça pra eu
+detalhar esse caminho se decidir usá-lo.

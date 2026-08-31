@@ -2,6 +2,6 @@ anthropic
 beautifulsoup4
 flask
 pymupdf
-weasyprint
+Pillow
 openpyxl
 gunicorn

@@ -15,10 +15,12 @@ como rodar, como gerar o PDF final).
 
 ## Publicar na internet
 
-Veja [DEPLOY.md](DEPLOY.md) — deploy no Render via Docker, com login
-protegendo o acesso.
+Veja [DEPLOY.md](DEPLOY.md) — deploy no Vercel (zero-config, Flask
+detectado automaticamente), com login protegendo o acesso. Também tem um
+`Dockerfile`/`render.yaml` prontos como alternativa via Render.
 
 ## Stack
 
-Flask + Anthropic API (Claude) + PyMuPDF (leitura de PDF/imagem) +
-WeasyPrint (geração de PDF) + BeautifulSoup (preenchimento do template HTML).
+Flask + Anthropic API (Claude) + PyMuPDF (leitura de PDF/imagem e geração
+do PDF final, inclusive notas de rodapé por página) + BeautifulSoup
+(preenchimento do template HTML).

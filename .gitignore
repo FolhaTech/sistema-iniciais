@@ -23,6 +23,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Vercel CLI (vinculo local do projeto, especifico de cada maquina)
+.vercel/
+
 # Editores / SO
 .vscode/
 .DS_Store

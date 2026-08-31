@@ -38,9 +38,16 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("APP_ENV") == "production"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-UPLOADS_ROOT = SCRIPT_DIR / "_uploads"
-OUTPUT_DIR = SCRIPT_DIR / "Peticoes Geradas"
-OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Em hospedagem serverless (Vercel seta a variavel VERCEL=1 automaticamente)
+# o disco onde o codigo foi implantado e SOMENTE LEITURA -- so /tmp aceita
+# escrita, e e efemero (some a qualquer momento; nunca usar pra guardar
+# nada que precise sobreviver ao request). Localmente (Windows, .bat)
+# continua tudo dentro da propria pasta do projeto, como sempre foi.
+_WRITABLE_ROOT = Path("/tmp") if os.environ.get("VERCEL") else SCRIPT_DIR
+UPLOADS_ROOT = _WRITABLE_ROOT / "_uploads"
+OUTPUT_DIR = _WRITABLE_ROOT / "Peticoes Geradas"
+OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 
 MODEL_OPTIONS = [
     ("claude-haiku-4-5", "Claude Haiku (padrão — mais barato e rápido)"),

@@ -33,6 +33,22 @@ Abra o PowerShell e rode (trocando pela sua chave real):
 Feche e abra o PowerShell/terminal de novo depois disso (o setx só tem
 efeito em janelas novas).
 
+PASSO 2.1 — Definir o login do sistema web (obrigatório)
+-----------------------------------------------------------
+Desde que o sistema passou a poder ser publicado na internet (ver
+DEPLOY.md), a Opção A (sistema web) sempre exige login — inclusive
+rodando local, no seu computador. Sem isso configurado, a tela de login
+nunca aceita nenhuma senha (ela não "libera sozinha" — é assim de
+propósito, pra nunca ficar aberta por engano).
+
+Crie (ou edite, se já existir) o arquivo ".env" nesta pasta (mesmo lugar
+onde fica a ANTHROPIC_API_KEY) e adicione duas linhas:
+
+    APP_USERNAME=escolha-um-usuario
+    APP_PASSWORD=escolha-uma-senha
+
+Isso não afeta as Opções B/C (linha de comando), que não têm login.
+
 OPCIONAL — Conectar a uma pasta do SharePoint
 ------------------------------------------------
 Por padrão você faz upload da pasta do cliente manualmente (Opção A abaixo).
@@ -158,6 +174,9 @@ SE ALGO DER ERRADO
 --------------------
 - "ANTHROPIC_API_KEY não configurada": repita o Passo 2 e abra um terminal
   novo.
+- Tela de login não aceita nenhum usuário/senha: falta configurar
+  APP_USERNAME/APP_PASSWORD no ".env" (Passo 2.1) — sem isso, o login
+  nunca libera, mesmo com a senha "certa".
 - Erro de autenticação da API: a chave pode estar errada ou sem crédito —
   confira em console.anthropic.com.
 - Algum documento não é PDF/PNG/JPG/XLSX: o script ignora arquivos de

@@ -307,7 +307,18 @@ SCHEMA_PROPERTIES = {
     "danos_morais_laudo_1": _nullable_string(),
     "danos_morais_laudo_2": _nullable_string(),
     "danos_morais_relacao": _nullable_string(),
-    "fatos_lista": {"type": "array", "items": {"type": "string"}},
+    "fatos_lista": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "data": {"type": "string"},  # AAAA-MM-DD; "" se o documento nao tiver data
+                "texto": {"type": "string"},
+            },
+            "required": ["data", "texto"],
+            "additionalProperties": False,
+        },
+    },
     "recebeu_negativa_formal": _nullable_bool(),
     "tem_declaracao_gratuidade": _nullable_bool(),
     "gratuidade_documentos_total": {"type": "integer"},
@@ -503,6 +514,18 @@ Requerente encontra-se em acompanhamento psicológico especializado, diante dos 
 prejuízos emocionais decorrentes das sequelas pós-bariátricas, apresentando baixa \
 autoestima, insatisfação com a própria imagem corporal [...]"
 
+REGRA DE NÃO REPETIÇÃO DAS COMORBIDADES (vale para os três campos acima): cada achado aparece em \
+UM SÓ campo. comorbidades_fisicas_1 fica restrito às DEFORMIDADES e às regiões do corpo afetadas \
+(abdome, mamas, dorso, glúteos, braços, coxas, região íntima etc.) — NÃO inclua aqui feridas, \
+intertrigo, mau odor, dificuldade de higiene nem sofrimento emocional. comorbidades_fisicas_2 \
+fica restrito às CONSEQUÊNCIAS FUNCIONAIS/HIGIÊNICAS da flacidez (intertrigo, feridas nas dobras, \
+celulites, higiene, sudorese, atrito, uso de cremes) e NÃO repete as regiões nem as deformidades \
+já citadas em comorbidades_fisicas_1. comorbidades_psicologicas fica restrito ao IMPACTO \
+EMOCIONAL (autoestima, humor, imagem corporal, convívio social) e NÃO repete achados físicos. \
+Antes de responder, releia os três textos: se uma mesma região ou sintoma aparecer em mais de um \
+deles, mantenha somente no campo mais adequado e remova dos outros. Os três campos são \
+parágrafos separados na petição, por isso cada um deve acrescentar informação nova.
+
 - danos_psicologicos_paragrafo (diagnóstico psicológico formal com CID, se houver, do laudo \
 psicológico): "a Requerente [...] apresenta problemas psicológicos, como isolamento social, \
 vergonha em demasia, insegurança, baixa autoestima [...], podendo ser classificado como \
@@ -523,8 +546,11 @@ laudo, especificamente, DIAGNOSTICAR blefarocalazo (ou lipedema) NA PACIENTE e d
 prejuízo funcional/comprometimento do campo visual decorrente disso, como uma condição de saúde \
 à parte — não apenas mais um procedimento estético da lista.
 
-- fatos_lista: um ARRAY com um item de string PARA CADA parágrafo da narrativa cronológica dos \
-fatos — NÃO existe limite de quantidade, use quantos parágrafos forem necessários para cobrir \
+- fatos_lista: um ARRAY de objetos {"data", "texto"}, UM OBJETO PARA CADA parágrafo da narrativa \
+cronológica dos fatos. "data" é a data do fato no formato AAAA-MM-DD (ex: "2026-06-24"), copiada \
+do documento de origem — use "" somente se o documento realmente não trouxer data nenhuma. "texto" \
+é o parágrafo da narrativa. O sistema reordena os itens pela "data", mas você também deve entregá-los \
+já em ordem cronológica. NÃO existe limite de quantidade, use quantos parágrafos forem necessários para cobrir \
 TODOS os fatos/contatos relevantes encontrados nos documentos, mesmo que sejam 5, 7 ou mais. É \
 um erro grave resumir/comprimir vários fatos distintos num parágrafo só só para reduzir a \
 quantidade — cada fato ou contato distinto (solicitação inicial, cada nova tentativa/reenvio, \
@@ -987,7 +1013,7 @@ def make_batches(files):
     return batches
 
 
-GRUPOS_CRITICOS_DUPLA_CONSULTA = {"laudo", "gratuidade"}
+GRUPOS_CRITICOS_DUPLA_CONSULTA = {"laudo", "gratuidade", "contato"}
 
 
 def eh_lote_critico(batch):
@@ -1336,7 +1362,7 @@ def merge_results(all_results):
         for v in values:
             if v not in uniq:
                 uniq.append(v)
-        if key in ("procedimentos_lista", "gratuidade_documentos_lista") and len(uniq) > 1:
+        if key in ("procedimentos_lista", "gratuidade_documentos_lista", "fatos_lista") and len(uniq) > 1:
             # As duas tentativas do lote critico (ver eh_lote_critico) podem
             # divergir por variacao do proprio modelo -- entre elas, a lista
             # mais longa tem mais chance de estar completa (o erro mais
@@ -1348,8 +1374,45 @@ def merge_results(all_results):
             merged[key] = uniq[0]
         if len(uniq) > 1:
             conflicts[key] = uniq
+    merged["fatos_lista"] = _ordenar_fatos(merged.get("fatos_lista"))
     _drop_duplicate_urgencia_photo(merged)
     return merged, conflicts
+
+
+def _data_para_iso(data):
+    """Normaliza a data de um fato para AAAA-MM-DD (aceita tambem DD/MM/AAAA,
+    caso o modelo devolva fora do formato pedido). Devolve "" se nao der."""
+    data = (data or "").strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", data):
+        return data
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", data)
+    if m:
+        return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+    return ""
+
+
+def _ordenar_fatos(itens):
+    """fatos_lista vira texto corrido em ordem cronologica. Cada item traz a
+    data do proprio fato; itens sem data herdam a data do item anterior (ex:
+    um complemento logo depois de um e-mail datado), para ficarem ao lado do
+    fato a que se referem. Empate de data preserva a ordem original. Devolve
+    a lista de strings, pronta para a petição."""
+    if not itens:
+        return []
+    marcados = []
+    data_anterior = ""
+    for ordem, item in enumerate(itens):
+        if isinstance(item, dict):
+            data = _data_para_iso(item.get("data"))
+            texto = (item.get("texto") or "").strip()
+        else:
+            data, texto = "", str(item or "").strip()
+        data = data or data_anterior
+        data_anterior = data
+        if texto:
+            marcados.append((data, ordem, texto))
+    marcados.sort(key=lambda t: (t[0], t[1]))
+    return [texto for _, _, texto in marcados]
 
 
 def _drop_duplicate_urgencia_photo(merged):
@@ -1369,6 +1432,92 @@ def _drop_duplicate_urgencia_photo(merged):
     }
     if urgencia_pagina in outras_paginas - {""}:
         merged["laudo_urgencia_pagina"] = None
+
+
+# ---------------------------------------------------------------------------
+# Dados cadastrais da operadora -- segunda passada focada
+# ---------------------------------------------------------------------------
+# Na passada principal, a operadora divide o lote com dezenas de outros
+# campos (laudo, RG, gratuidade...), e o CNPJ/endereço do cartão da Receita
+# Federal costumam sair vazios mesmo com o documento na pasta. Por isso, se
+# algum desses campos ficou em branco, fazemos uma consulta curta, só sobre a
+# operadora, percorrendo os lotes até preencher tudo -- só preenche o que
+# estava vazio, nunca sobrescreve o que a passada principal já achou.
+
+OPERADORA_CAMPOS = [
+    "operadora_nome", "operadora_cnpj", "operadora_logradouro", "operadora_numero",
+    "operadora_bairro", "operadora_cidade", "operadora_uf", "operadora_cep", "operadora_email",
+]
+OPERADORA_CAMPOS_OBRIGATORIOS = [
+    "operadora_cnpj", "operadora_logradouro", "operadora_numero", "operadora_bairro",
+    "operadora_cidade", "operadora_uf", "operadora_cep",
+]
+
+OPERADORA_SYSTEM_PROMPT = """Você extrai SOMENTE os dados cadastrais da OPERADORA DE PLANO DE SAÚDE \
+(a empresa requerida, não a cliente) a partir dos documentos enviados, para a qualificação da \
+requerida numa petição inicial. Use apenas o que está escrito nos documentos; nunca invente.
+
+Fontes, em ordem de confiança:
+1) Comprovante de inscrição e de situação cadastral no CNPJ (Receita Federal): "NOME EMPRESARIAL" \
+(razão social) vai em operadora_nome, e "NÚMERO DE INSCRIÇÃO" (o CNPJ) vai em operadora_cnpj. O \
+endereço vem em DUAS linhas e as duas são obrigatórias: a linha de cima traz LOGRADOURO, NÚMERO e \
+COMPLEMENTO (ex: "R SANTOS DUMONT" / "2705"); a linha de baixo traz CEP, BAIRRO/DISTRITO, \
+MUNICÍPIO e UF. Preencha logradouro e número com a linha de cima, e cep/bairro/cidade/uf com a \
+linha de baixo. Não pare na primeira linha.
+2) Consulta de operadora na ANS (Razão Social, Registro ANS, CNPJ) — confirma nome e CNPJ.
+3) Carteirinha, papel timbrado de carta de negativa, rodapé de e-mail da operadora.
+
+operadora_email é o e-mail de contato DA OPERADORA: em troca de e-mails, vem em "De:"/"From:" quando \
+a operadora responde, ou em "Para:"/"To:" quando a cliente ou o escritório envia. NUNCA use o e-mail \
+do escritório de advocacia nem o da cliente.
+
+Se um número (CNPJ, CEP) estiver parcialmente ilegível, NÃO escreva asteriscos nem dígitos chutados: \
+deixe o campo vazio "". Responda apenas com o JSON pedido — nada de texto fora do JSON."""
+
+OPERADORA_SCHEMA = {
+    "type": "object",
+    "properties": {k: {"type": "string"} for k in OPERADORA_CAMPOS},
+    "required": OPERADORA_CAMPOS,
+    "additionalProperties": False,
+}
+
+
+def operadora_incompleta(data):
+    return any(not (data.get(k) or "").strip() for k in OPERADORA_CAMPOS_OBRIGATORIOS)
+
+
+def _call_operadora(client, model, files, label):
+    print(f"  -> Consulta da operadora, lote {label}: {', '.join(f.name for f in files)}")
+    content = build_content_blocks(files)
+    try:
+        response = _criar_mensagem_com_retry(
+            client,
+            model=model,
+            max_tokens=2000,
+            system=OPERADORA_SYSTEM_PROMPT + "\n\nResponda APENAS com um objeto JSON válido, sem markdown.",
+            messages=[{"role": "user", "content": content}],
+        )
+        text = next(b.text for b in response.content if b.type == "text")
+        return extract_json_loose(text)
+    except Exception as e:
+        print(f"     [aviso] consulta da operadora falhou neste lote ({type(e).__name__}): {str(e)[:150]}")
+        return {}
+
+
+def completar_dados_operadora(client, model, files, data):
+    """Preenche in-place os campos da operadora que a passada principal deixou
+    vazios, consultando os lotes ate completar. Devolve o proprio `data`."""
+    if not operadora_incompleta(data):
+        return data
+    print("  -> Dados da operadora incompletos; consultando de novo só essa parte...")
+    for i, batch in enumerate(make_batches(files), 1):
+        achado = _call_operadora(client, model, batch, str(i))
+        for k in OPERADORA_CAMPOS:
+            if not (data.get(k) or "").strip() and (achado.get(k) or "").strip():
+                data[k] = achado[k].strip()
+        if not operadora_incompleta(data):
+            break
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -1502,10 +1651,17 @@ def _achar_area_dos_trechos(pymupdf_mod, page, trechos):
         trechos = [trechos]
     area = None
     for trecho in trechos:
-        trecho = (trecho or "").strip()
+        # o modelo copia o trecho do laudo, mas quebras de linha, espacos duplos
+        # e hifenizacao do PDF atrapalham a busca literal -- normaliza e tenta
+        # fragmentos cada vez menores ate achar algo na pagina
+        trecho = re.sub(r"\s+", " ", (trecho or "")).strip()
         if len(trecho) < 8:
             continue
-        rects = page.search_for(trecho) or page.search_for(trecho[: max(8, len(trecho) // 2)])
+        rects = []
+        for fragmento in (trecho, trecho[: max(8, len(trecho) // 2)], trecho[:30]):
+            rects = page.search_for(fragmento)
+            if rects:
+                break
         for r in rects:
             area = r if area is None else area | r
     if area is None:
@@ -1518,18 +1674,48 @@ def _achar_area_dos_trechos(pymupdf_mod, page, trechos):
     )
 
 
+PRINT_JPEG_QUALIDADE = 85
+PRINT_IMAGEM_MAX_LADO_PX = 1600  # foto de RG/carteirinha/print cabe bem nisso e fica leve
+
+
+def _imagem_arquivo_para_jpeg(path: Path) -> bytes:
+    """PNG/JPG de documento -> JPEG reduzido (lado maior <= PRINT_IMAGEM_MAX_LADO_PX),
+    com a rotacao do EXIF aplicada (foto tirada no celular) e transparencia
+    trocada por fundo branco. Motivo: a peticao final vai no HTML que o
+    navegador envia de volta pro servidor -- o limite de corpo de requisicao
+    do Vercel e ~4,5 MB, e um PNG de scanner sozinho ja come boa parte disso."""
+    import io
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+            rgba = im.convert("RGBA")
+            fundo = Image.new("RGB", im.size, (255, 255, 255))
+            fundo.paste(rgba, mask=rgba.split()[-1])
+            im = fundo
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+        im.thumbnail((PRINT_IMAGEM_MAX_LADO_PX, PRINT_IMAGEM_MAX_LADO_PX))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=PRINT_JPEG_QUALIDADE, optimize=True)
+        return buf.getvalue()
+
+
 def _render_doc_photo_base64(path: Path, pagina_str, trechos_busca=None):
-    """Retorna (base64, media_type) da pagina pedida (se for PDF) ou da
-    propria imagem (se ja for PNG/JPG). Se trechos_busca for informado,
-    recorta so a faixa da pagina onde ele aparece (ver
-    _achar_area_dos_trechos) -- caindo de volta pra pagina inteira se nao
-    achar. Nunca lanca excecao -- (None, None) se o arquivo nao existir, a
-    pagina nao for legivel, etc: o print simplesmente fica de fora da
-    peticao em vez de travar a geracao."""
+    """Retorna (base64, media_type, recortada) da pagina pedida (se for PDF) ou
+    da propria imagem (se ja for PNG/JPG), sempre em JPEG para manter o HTML
+    leve. `recortada` e True quando so a faixa do trecho foi usada (e False
+    quando veio a pagina inteira). Se trechos_busca for informado, recorta so
+    a faixa da pagina onde ele aparece (ver _achar_area_dos_trechos) --
+    caindo de volta pra pagina inteira se nao achar. Nunca lanca excecao --
+    (None, None, False) se o arquivo nao existir, a pagina nao for legivel,
+    etc: o print simplesmente fica de fora da peticao em vez de travar a
+    geracao."""
     try:
         ext = path.suffix.lower()
         if ext in (".png", ".jpg", ".jpeg"):
-            return base64.standard_b64encode(path.read_bytes()).decode("ascii"), SUPPORTED_EXT[ext]
+            return base64.standard_b64encode(_imagem_arquivo_para_jpeg(path)).decode("ascii"), "image/jpeg", False
         if ext == ".pdf":
             import pymupdf
             doc = pymupdf.open(str(path))
@@ -1545,7 +1731,7 @@ def _render_doc_photo_base64(path: Path, pagina_str, trechos_busca=None):
                     # porque o laudo nao menciona isso). Sem uma pagina certa,
                     # e melhor nao inserir print nenhum do que arriscar
                     # mostrar a pagina errada ou repetir outro print.
-                    return None, None
+                    return None, None, False
                 idx = max(0, min(pagina - 1, doc.page_count - 1))
                 page = doc.load_page(idx)
                 clip = _achar_area_dos_trechos(pymupdf, page, trechos_busca)
@@ -1553,27 +1739,38 @@ def _render_doc_photo_base64(path: Path, pagina_str, trechos_busca=None):
                     pix = page.get_pixmap(matrix=pymupdf.Matrix(3, 3), clip=clip)
                 else:
                     pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
-                return base64.standard_b64encode(pix.tobytes("png")).decode("ascii"), "image/png"
+                jpeg = pix.tobytes("jpg", jpg_quality=PRINT_JPEG_QUALIDADE)
+                return base64.standard_b64encode(jpeg).decode("ascii"), "image/jpeg", clip is not None
             finally:
                 doc.close()
     except Exception:
         pass
-    return None, None
+    return None, None, False
 
 
-def _insert_one_photo(soup, files_lookup, slot_id, arquivo_valor, pagina_valor, caption, trechos_busca=None):
+def _insert_one_photo(soup, files_lookup, slot_id, arquivo_valor, pagina_valor, caption,
+                      trechos_busca=None, paginas_inteiras_usadas=None):
     """Preenche (ou remove, se nao houver imagem) um <div class="doc-photo">
-    -- devolve True se preencheu, False se removeu (sem documento)."""
+    -- devolve True se preencheu, False se removeu (sem documento, ou pagina
+    inteira que ja apareceu em outro slot). paginas_inteiras_usadas registra
+    as paginas mostradas sem recorte: sem isso, quando o trecho nao acha o
+    texto, o laudo inteiro entrava na peticao uma vez por slot."""
     div = soup.find("div", attrs={"data-photo": slot_id})
     if div is None:
         return None
     path = _resolve_source_file(files_lookup, arquivo_valor)
-    b64, media_type = (None, None)
+    b64, media_type, recortada = (None, None, False)
     if path is not None:
-        b64, media_type = _render_doc_photo_base64(path, pagina_valor, trechos_busca)
+        b64, media_type, recortada = _render_doc_photo_base64(path, pagina_valor, trechos_busca)
     if not b64:
         div.decompose()
         return False
+    if paginas_inteiras_usadas is not None and not recortada:
+        chave = (path.as_posix(), re.sub(r"\D", "", str(pagina_valor or "")) or "1")
+        if chave in paginas_inteiras_usadas:
+            div.decompose()
+            return False
+        paginas_inteiras_usadas.add(chave)
     img = soup.new_tag("img")
     img["src"] = f"data:{media_type};base64,{b64}"
     img["alt"] = caption
@@ -1589,6 +1786,7 @@ def _insert_one_photo(soup, files_lookup, slot_id, arquivo_valor, pagina_valor, 
 def _insert_doc_photos(soup, data, files):
     filled, skipped = [], []
     files_lookup = _build_files_lookup(files) if files else {}
+    paginas_inteiras_usadas = set()
     procedimentos = data.get("procedimentos_lista") or []
     for slot_id, arquivo_field, pagina_field, caption, trecho_field in PHOTO_SLOTS:
         if slot_id == "laudo_procedimentos":
@@ -1600,7 +1798,8 @@ def _insert_doc_photos(soup, data, files):
         else:
             trechos = data.get(trecho_field) if trecho_field else None
         resultado = _insert_one_photo(
-            soup, files_lookup, slot_id, data.get(arquivo_field), data.get(pagina_field), caption, trechos
+            soup, files_lookup, slot_id, data.get(arquivo_field), data.get(pagina_field), caption, trechos,
+            paginas_inteiras_usadas=paginas_inteiras_usadas,
         )
         if resultado is None:
             continue
@@ -2042,7 +2241,8 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
         elif cb_planilha.has_attr("checked"):
             del cb_planilha["checked"]
 
-    (filled if _insert_fatos_lista(soup, data.get("fatos_lista")) else skipped).append("fatos_lista")
+    fatos = _ordenar_fatos(data.get("fatos_lista"))
+    (filled if _insert_fatos_lista(soup, fatos) else skipped).append("fatos_lista")
 
     output_path.write_text(str(soup), encoding="utf-8")
     return filled, skipped
@@ -2120,6 +2320,7 @@ def main():
             all_results.append(call_batch(client, args.model, batch, f"{i}b"))
 
     data, conflicts = merge_results(all_results)
+    completar_dados_operadora(client, args.model, files, data)
 
     output_path = Path(args.output).resolve() if args.output else folder / f"Petição Inicial - {folder.name}.html"
     output_path = unique_output_path(output_path)

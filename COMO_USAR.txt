@@ -165,6 +165,15 @@ topo listando o que não foi encontrado e eventuais divergências entre
 documentos — revise tudo isso, corrija o que precisar, confira a
 comarca/vara e os checkboxes do topo, e use "🖨️ Gerar PDF".
 
+Edição livre: a petição INTEIRA é editável (não só os campos amarelos).
+Clique em qualquer texto e digite; use os botões N / I / S (ou Ctrl+B,
+Ctrl+I, Ctrl+U) para negrito, itálico e sublinhado; Ctrl+Z desfaz.
+Imagens: para tirar uma foto que saiu errada, clique no × vermelho em
+cima dela; para colocar outra, clique em "Inserir imagem" com o cursor
+no parágrafo onde ela deve ficar (a imagem entra logo depois desse
+parágrafo). Se o PDF não gerar com a mensagem de tamanho, remova algumas
+imagens e tente de novo.
+
 CUSTO ESTIMADO
 ---------------
 Usa o modelo Claude Haiku (o mais barato). Uma pasta de cliente típica

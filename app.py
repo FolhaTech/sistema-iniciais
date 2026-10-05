@@ -371,6 +371,7 @@ def processar():
                 all_results.append(pp.call_batch(client, model, batch, f"{i}b"))
 
         data, _ = pp.merge_results(all_results)
+        pp.completar_dados_operadora(client, model, files, data)
 
         nome_cliente = data.get("cliente_nome_completo") or client_folder_name
         output_path = OUTPUT_DIR / f"Petição Inicial - {nome_cliente}.html"

@@ -104,20 +104,27 @@
   .doc-photo{margin:10px 0 18px 0; text-align:center; break-inside:avoid;}
   .doc-photo img{max-width:60%; height:auto; border:1px solid #bbb; border-radius:3px; box-shadow:0 1px 3px rgba(0,0,0,.15);}
   .doc-photos-row .doc-photo img{max-width:100%;}
+  /* Nenhuma imagem sai da folha: as coladas sem bloco ficam no limite da página */
+  main.petition img{max-width:100%; height:auto;}
+  main.petition .doc-photo img{max-width:60%;}
+  main.petition .doc-photos-row .doc-photo img{max-width:100%;}
   .doc-photo-caption{font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:#666; margin:4px 0 0 0; text-indent:0;}
   .doc-photo:empty{display:none;}
   .doc-photo{position:relative;}
+  .photo-ctrl{position:absolute; top:6px; right:6px; display:flex; gap:4px;}
   .rm-photo{
-    position:absolute; top:6px; right:6px; width:26px; height:26px; border-radius:50%;
+    width:26px; height:26px; border-radius:50%;
     border:none; background:#b3261e; color:#fff; font-size:17px; line-height:26px; padding:0;
     cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.35); font-family:Arial,Helvetica,sans-serif;
   }
   .rm-photo:hover{background:#8c1d18;}
+  .rm-photo.size{background:#3a6ea5; font-size:16px;}
+  .rm-photo.size:hover{background:#4a80bb;}
   .toolbar .row .sep{width:1px; align-self:stretch; background:#4a5470;}
   .toolbar .hint{color:#cfd6e6; font-size:12px;}
   main.petition:focus{outline:none;}
   @media print{
-    .rm-photo{display:none;}
+    .photo-ctrl{display:none;}
   }
   @media print{
     @page{size:A4; margin:0;}
@@ -151,9 +158,13 @@
 <button type="button" onmousedown="event.preventDefault()" onclick="acaoFormato('italic')" title="Itálico (Ctrl+I)"><i>I</i></button>
 <button type="button" onmousedown="event.preventDefault()" onclick="acaoFormato('underline')" title="Sublinhado (Ctrl+U)"><u>S</u></button>
 <span class="sep"></span>
-<button type="button" onmousedown="event.preventDefault()" onclick="document.getElementById('input-imagem').click()" title="Insere uma imagem na posição do cursor (depois do parágrafo onde ele está)">🖼️ Inserir imagem</button>
-<input type="file" id="input-imagem" accept="image/*" style="display:none" onchange="inserirImagem(this)">
-<span class="hint">Todo o texto da petição pode ser alterado: clique e digite (Ctrl+Z desfaz). Use o × sobre uma imagem para removê-la.</span>
+<button type="button" onmousedown="event.preventDefault()" onclick="alterarCaixa('maiusculas')" title="Selecione um trecho e passe para MAIÚSCULAS">AA</button>
+<button type="button" onmousedown="event.preventDefault()" onclick="alterarCaixa('minusculas')" title="Selecione um trecho e passe para minúsculas">aa</button>
+<button type="button" onmousedown="event.preventDefault()" onclick="alterarCaixa('iniciais')" title="Selecione um trecho e deixe a primeira letra de cada palavra em maiúscula">Aa</button>
+<span class="sep"></span>
+<button type="button" onmousedown="event.preventDefault()" onclick="document.getElementById('input-imagem').click()" title="Insere imagens ou PDFs na posição do cursor (depois do parágrafo onde ele está). Também é possível colar uma imagem com Ctrl+V.">🖼️ Inserir imagem ou PDF</button>
+<input type="file" id="input-imagem" accept="image/*,.pdf,application/pdf" multiple style="display:none" onchange="inserirImagem(this)">
+<span class="hint">Todo o texto da petição pode ser alterado: clique e digite (Ctrl+Z desfaz). Use − / + sobre uma foto para diminuir ou aumentar, e × para removê-la.</span>
 </div>
 <div class="legend">
 <span><span class="swatch sw-yellow"></span>clique e digite — muda a cada cliente</span>
@@ -573,21 +584,52 @@ function reduzirImagem(origem, maxLado){
   });
 }
 
-function adicionarBotaoRemover(bloco){
+// Botões da foto: − e + mudam a largura (passos de 10%), × remove o bloco.
+function adicionarControlesFoto(bloco){
+  var grupo = document.createElement('div');
+  grupo.className = 'photo-ctrl';
+  grupo.contentEditable = 'false';
+
+  var menor = document.createElement('button');
+  menor.type = 'button';
+  menor.className = 'rm-photo size';
+  menor.title = 'Diminuir a foto';
+  menor.textContent = '−';
+  menor.onclick = function(){ ajustarLargura(bloco, -10); };
+
+  var maior = document.createElement('button');
+  maior.type = 'button';
+  maior.className = 'rm-photo size';
+  maior.title = 'Aumentar a foto';
+  maior.textContent = '+';
+  maior.onclick = function(){ ajustarLargura(bloco, 10); };
+
   var b = document.createElement('button');
   b.type = 'button';
   b.className = 'rm-photo';
-  b.contentEditable = 'false';
   b.title = 'Remover esta imagem';
   b.textContent = '×';
   b.onclick = function(){
     if(confirm('Remover esta imagem da petição?')) bloco.remove();
   };
-  bloco.insertBefore(b, bloco.firstChild);
+
+  grupo.appendChild(menor);
+  grupo.appendChild(maior);
+  grupo.appendChild(b);
+  bloco.insertBefore(grupo, bloco.firstChild);
 }
 
-function inserirBlocoImagem(src){
-  var petition = document.getElementById('petition');
+function ajustarLargura(bloco, passo){
+  var img = bloco.querySelector('img');
+  if(!img || !bloco.clientWidth) return;
+  var atual = parseFloat(bloco.dataset.pct) || Math.round(img.offsetWidth / bloco.clientWidth * 100);
+  var novo = Math.min(100, Math.max(10, atual + passo));
+  bloco.dataset.pct = novo;
+  img.style.maxWidth = 'none';
+  img.style.width = novo + '%';
+}
+
+function criarBlocoImagem(src){
   var bloco = document.createElement('div');
   bloco.className = 'doc-photo';
   var img = document.createElement('img');
@@ -599,10 +641,17 @@ function inserirBlocoImagem(src){
   legenda.textContent = 'Documento anexado';
   bloco.appendChild(img);
   bloco.appendChild(legenda);
-  adicionarBotaoRemover(bloco);
+  adicionarControlesFoto(bloco);
+  return bloco;
+}
 
-  // Depois do bloco (parágrafo, título ou foto) onde o cursor está; se não
-  // houver cursor na petição, antes do "Termos em que" (fim do texto).
+// Insere os blocos na ordem. Posição: depois do bloco (parágrafo, título ou
+// foto) onde o cursor está; se não houver cursor na petição, antes do
+// "Termos em que" (fim do texto).
+function inserirBlocosImagem(srcs){
+  var petition = document.getElementById('petition');
+  var pai = petition;
+  var antes = null;
   var ref = null;
   if(ultimoCursor && petition.contains(ultimoCursor.startContainer)){
     var no = ultimoCursor.startContainer;
@@ -610,31 +659,243 @@ function inserirBlocoImagem(src){
     ref = el ? el.closest('p, h2, h3, h4, blockquote, .doc-photo') : null;
   }
   if(ref && ref !== petition && petition.contains(ref)){
-    ref.parentNode.insertBefore(bloco, ref.nextSibling);
+    pai = ref.parentNode;
+    antes = ref.nextSibling;
   } else {
     var termos = Array.from(petition.querySelectorAll('p')).find(function(p){
       return /^Termos em que/.test(p.textContent.trim());
     });
-    if(termos) termos.parentNode.insertBefore(bloco, termos);
-    else petition.appendChild(bloco);
+    if(termos){
+      pai = termos.parentNode;
+      antes = termos;
+    }
   }
+  var ultimo = null;
+  srcs.forEach(function(src){
+    ultimo = criarBlocoImagem(src);
+    pai.insertBefore(ultimo, antes);
+  });
   ultimoCursor = null;
-  bloco.scrollIntoView({behavior: 'smooth', block: 'center'});
+  ultimo.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
+// PDF -> uma imagem JPEG por página. O pdf.js vem do cdnjs e só é carregado
+// quando alguém insere um PDF.
+var PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+var LADO_PAGINA_PDF_PX = 1400;
+var pdfjsPronto = null;
+
+function carregarPdfJs(){
+  if(!pdfjsPronto){
+    pdfjsPronto = new Promise(function(resolve, reject){
+      var s = document.createElement('script');
+      s.src = PDFJS_BASE + 'pdf.min.js';
+      s.onload = function(){
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js';
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = function(){
+        pdfjsPronto = null;
+        reject(new Error('Não foi possível carregar o leitor de PDF. Verifique a conexão com a internet.'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return pdfjsPronto;
+}
+
+async function pdfParaImagens(arquivo){
+  var lib = await carregarPdfJs();
+  var paginas = [];
+  try{
+    var pdf = await lib.getDocument({data: await arquivo.arrayBuffer()}).promise;
+    for(var n = 1; n <= pdf.numPages; n++){
+      var pagina = await pdf.getPage(n);
+      var base = pagina.getViewport({scale: 1});
+      var escala = Math.min(2, LADO_PAGINA_PDF_PX / Math.max(base.width, base.height));
+      var vp = pagina.getViewport({scale: escala});
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.round(vp.width);
+      canvas.height = Math.round(vp.height);
+      var ctx = canvas.getContext('2d');
+      // Fundo branco: sem ele, páginas sem fundo viram pretas no JPEG
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await pagina.render({canvasContext: ctx, viewport: vp}).promise;
+      paginas.push(canvas.toDataURL('image/jpeg', 0.85));
+    }
+  }catch(err){
+    throw new Error('Não foi possível ler o PDF "' + arquivo.name + '".');
+  }
+  return paginas;
+}
+
+async function inserirArquivos(arquivos){
+  var srcs = [];
+  for(var i = 0; i < arquivos.length; i++){
+    var f = arquivos[i];
+    try{
+      if(f.type === 'application/pdf' || /\.pdf$/i.test(f.name)){
+        srcs = srcs.concat(await pdfParaImagens(f));
+      } else {
+        var url = URL.createObjectURL(f);
+        try{
+          srcs.push(await reduzirImagem(url, LADO_MAX_IMAGEM_PX));
+        }finally{
+          URL.revokeObjectURL(url);
+        }
+      }
+    }catch(err){
+      alert(err.message);
+    }
+  }
+  if(srcs.length) inserirBlocosImagem(srcs);
 }
 
 async function inserirImagem(input){
-  var arquivo = input.files && input.files[0];
+  var arquivos = Array.from(input.files || []);
   input.value = '';
-  if(!arquivo) return;
-  var url = URL.createObjectURL(arquivo);
-  try{
-    var src = await reduzirImagem(url, LADO_MAX_IMAGEM_PX);
-    inserirBlocoImagem(src);
-  }catch(err){
-    alert(err.message);
-  }finally{
-    URL.revokeObjectURL(url);
+  if(arquivos.length) await inserirArquivos(arquivos);
+}
+
+function escaparHtml(t){
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Converte o HTML copiado (Word, navegador, PDF) em parágrafos com apenas
+// negrito, itálico e sublinhado. Fonte, tamanho, cor, realce e recuos de
+// origem são descartados, e o texto assume o padrão da petição.
+function paragrafosDeHtml(html){
+  var BLOCOS = ['P','DIV','H1','H2','H3','H4','H5','H6','LI','TR','TD','TH','BLOCKQUOTE','TABLE','UL','OL'];
+  var IGNORADOS = ['SCRIPT','STYLE','XML','META','LINK','TITLE','HEAD','O:P'];
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  var paragrafos = [];
+  var atual = '';
+  function fechar(){
+    var t = atual.trim();
+    if(t) paragrafos.push(t);
+    atual = '';
   }
+  function percorrer(no, fmt){
+    if(no.nodeType === 3){
+      var t = no.nodeValue.replace(/\s+/g, ' ');
+      if(!t) return;
+      var s = escaparHtml(t);
+      if(fmt.u) s = '<u>' + s + '</u>';
+      if(fmt.i) s = '<i>' + s + '</i>';
+      if(fmt.b) s = '<b>' + s + '</b>';
+      atual += s;
+      return;
+    }
+    if(no.nodeType !== 1 || IGNORADOS.indexOf(no.tagName) !== -1) return;
+    var tag = no.tagName;
+    if(tag === 'BR'){ atual += ' '; return; }
+    var bloco = BLOCOS.indexOf(tag) !== -1;
+    if(bloco) fechar();
+    var st = no.style || {};
+    var f = {
+      b: fmt.b || tag === 'B' || tag === 'STRONG' || st.fontWeight === 'bold' || parseInt(st.fontWeight, 10) >= 600,
+      i: fmt.i || tag === 'I' || tag === 'EM' || st.fontStyle === 'italic',
+      u: fmt.u || tag === 'U' || (st.textDecoration || '').indexOf('underline') !== -1
+    };
+    Array.from(no.childNodes).forEach(function(filho){ percorrer(filho, f); });
+    if(bloco) fechar();
+  }
+  percorrer(doc.body, {b: false, i: false, u: false});
+  fechar();
+  return paragrafos;
+}
+
+// Colar na petição. Imagem vira bloco de foto (com − / + / ×). Texto entra sem
+// a formatação de origem. Dentro de um campo amarelo/cinza, entra só texto puro.
+document.getElementById('petition').addEventListener('paste', async function(e){
+  var dados = e.clipboardData;
+  if(!dados) return;
+  e.preventDefault();
+  var texto = dados.getData('text/plain');
+  var html = dados.getData('text/html');
+  var paragrafos = html ? paragrafosDeHtml(html) : [];
+  if(!paragrafos.length && texto.trim()){
+    paragrafos = texto.split(/\r?\n/).map(function(l){ return escaparHtml(l.trim()); }).filter(Boolean);
+  }
+  if(!paragrafos.length){
+    var imagens = [];
+    Array.from(dados.items || []).forEach(function(item){
+      if(item.kind === 'file' && item.type.indexOf('image/') === 0) imagens.push(item.getAsFile());
+    });
+    if(imagens.length) await inserirArquivos(imagens);
+    return;
+  }
+  var sel = window.getSelection();
+  var no = sel.anchorNode;
+  var el = no ? (no.nodeType === 1 ? no : no.parentElement) : null;
+  var campo = el ? el.closest('.fill, .blank') : null;
+  if(campo){
+    // Só o texto do campo é trocado. Não usar execCommand aqui: com a seleção
+    // no elemento inteiro o navegador recria o span e perde classe e data-field.
+    var tmp = document.createElement('div');
+    tmp.innerHTML = paragrafos.join(' ');
+    var intervalo = sel.getRangeAt(0);
+    intervalo.deleteContents();
+    var texto = document.createTextNode(tmp.textContent.replace(/\s+/g, ' ').trim());
+    intervalo.insertNode(texto);
+    sel.collapse(texto, texto.length);
+    campo.dispatchEvent(new Event('input', {bubbles: true}));
+    return;
+  }
+  var inline = paragrafos.length === 1
+    ? paragrafos[0]
+    : paragrafos.map(function(p){ return '<p>' + p + '</p>'; }).join('');
+  document.execCommand('insertHTML', false, inline);
+});
+
+// Muda a caixa do trecho selecionado. Troca texto por texto com execCommand,
+// então Ctrl+Z desfaz e a formatação (negrito, etc.) é mantida.
+var PALAVRAS_MINUSCULAS = ['de','da','do','das','dos','e','em','para','com','por','a','o','as','os'];
+function alterarCaixa(modo){
+  var petition = document.getElementById('petition');
+  var sel = window.getSelection();
+  if(!sel.rangeCount || sel.isCollapsed || !petition.contains(sel.anchorNode)){
+    alert('Selecione o trecho do texto antes de mudar a caixa.');
+    return;
+  }
+  var transformar = {
+    maiusculas: function(t){ return t.toLocaleUpperCase('pt-BR'); },
+    minusculas: function(t){ return t.toLocaleLowerCase('pt-BR'); },
+    iniciais: function(t){
+      return t.toLocaleLowerCase('pt-BR').replace(/[\p{L}\p{N}]+/gu, function(p){
+        return PALAVRAS_MINUSCULAS.indexOf(p) !== -1 ? p : p.charAt(0).toLocaleUpperCase('pt-BR') + p.slice(1);
+      });
+    }
+  }[modo];
+
+  var range = sel.getRangeAt(0);
+  var iniNo = range.startContainer, iniOff = range.startOffset;
+  var fimNo = range.endContainer, fimOff = range.endOffset;
+  var raiz = range.commonAncestorContainer;
+  var nos = [];
+  if(raiz.nodeType === 3){
+    nos.push(raiz);
+  } else {
+    var walker = document.createTreeWalker(raiz, NodeFilter.SHOW_TEXT);
+    var atualNo;
+    while((atualNo = walker.nextNode())){
+      if(range.intersectsNode(atualNo)) nos.push(atualNo);
+    }
+  }
+  nos.forEach(function(no){
+    var ini = no === iniNo ? iniOff : 0;
+    var fim = no === fimNo ? fimOff : no.nodeValue.length;
+    var trecho = no.nodeValue.slice(ini, fim);
+    var novo = trecho ? transformar(trecho) : trecho;
+    if(!trecho || novo === trecho) return;
+    var r = document.createRange();
+    r.setStart(no, ini);
+    r.setEnd(no, fim);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    document.execCommand('insertText', false, novo);
+  });
 }
 
 // Cópia da página pronta para envio ao servidor: tira a barra de edição e os
@@ -643,7 +904,7 @@ async function inserirImagem(input){
 // PDF nem chega a ser gerado (erro FUNCTION_PAYLOAD_TOO_LARGE).
 async function htmlParaEnvio(){
   var copia = document.documentElement.cloneNode(true);
-  copia.querySelectorAll('.toolbar, .rm-photo').forEach(function(el){ el.remove(); });
+  copia.querySelectorAll('.toolbar, .photo-ctrl').forEach(function(el){ el.remove(); });
   var imgs = Array.from(copia.querySelectorAll('img'));
   for(var i = 0; i < imgs.length; i++){
     var src = imgs[i].getAttribute('src') || '';
@@ -655,7 +916,7 @@ async function htmlParaEnvio(){
 
 // Botões × das fotos que já estão na petição (as que o servidor anexou).
 document.querySelectorAll('#petition .doc-photo').forEach(function(bloco){
-  if(bloco.querySelector('img')) adicionarBotaoRemover(bloco);
+  if(bloco.querySelector('img')) adicionarControlesFoto(bloco);
 });
 
 async function gerarPdfComRodape(){

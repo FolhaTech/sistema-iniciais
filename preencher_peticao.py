@@ -1832,6 +1832,12 @@ _PDF_SIDE_MARGIN_PT = 65 * 72 / 96  # padding lateral de main.petition (65px CSS
 
 _PDF_BODY_CSS = """
 main{padding:0; line-height:1.15; font-size:13pt; font-family:Cambria,'Times New Roman',Georgia,serif; text-align:justify;}
+/* Igual ao .cond.hide do editor (ver <style> do modelo): sem esta regra, o
+   motor do PDF ignora a classe "hide" que o JS do editor aplica nos blocos
+   condicionais desmarcados no painel, e desenha as duas variantes de cada
+   grupo (ex: gratuidade de adulto E de menor, Do Direito padrao E de
+   autogestao) -- petição com seções I) e II) repetidas e contraditórias. */
+.cond.hide{display:none;}
 main p{margin:0 0 12px 0; text-indent:4.75cm;}
 main p.noindent{text-indent:0;}
 h2.title{text-align:center; font-size:13pt; line-height:1.15; margin:26px 0; text-indent:0; font-weight:bold;}

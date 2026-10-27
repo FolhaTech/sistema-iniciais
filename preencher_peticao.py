@@ -425,11 +425,26 @@ com/sem acento, "Bruna" vs "Brunna"), prefira a grafia do RG; se o RG não estiv
 legível, use a CNH. Nunca abrevie nem corte o nome — copie o nome COMPLETO, com todos os \
 sobrenomes, exatamente como impresso no documento escolhido.
 
+ESTADO CIVIL E PROFISSÃO DA CLIENTE (cliente_estado_civil, cliente_profissao) — a fonte mais \
+confiável é a PROCURAÇÃO (costuma ter um campo explícito "profissão:" e "estado civil:" na \
+qualificação da outorgante) ou a declaração de pobreza/hipossuficiência, que também costuma \
+qualificar a cliente da mesma forma. Copie exatamente a palavra usada no documento (ex: \
+"casada", "solteira", "união estável"; "auxiliar administrativo", "autônoma", "do lar") — NUNCA \
+infira a profissão a partir do contexto (ex: não escreva "auxiliar administrativo" só porque um \
+e-mail ou holerite menciona uma empresa, sem o documento realmente indicar o CARGO) nem reaproveite \
+a profissão de outro caso/cliente. Se nenhum documento do lote indicar expressamente o estado \
+civil ou a profissão, deixe o campo correspondente como "" — não adivinhe.
+
 CARTEIRINHA DO PLANO (carteirinha_numero) — copie o número EXATAMENTE como aparece na imagem \
 do cartão/carteirinha, dígito por dígito E com os MESMOS espaços/agrupamentos visuais entre os \
 blocos de dígitos que aparecem impressos no cartão (se o cartão separa os dígitos em blocos com \
 espaços entre eles, incluindo um possível dígito isolado no final, reproduza essa mesma \
-separação — não junte tudo numa sequência só nem corte o último dígito). Se houver mais \
+separação — não junte tudo numa sequência só nem corte o último dígito). ERRO COMUM E GRAVE: \
+acrescentar um ZERO A MAIS no início do número (ex: ler "0001-01031-19" e escrever \
+"00001-01031-19") — antes de responder, conte os dígitos de cada bloco que você vai escrever e \
+confirme que a contagem bate exatamente com os dígitos visíveis naquele bloco na imagem, \
+especialmente zeros à esquerda; não copie a quantidade de dígitos de outro número do mesmo \
+cartão (ex: "Reg. Plano", "CNS", código ANS) para este campo. Se houver mais \
 de um documento com esse número no mesmo lote (ex: cartão do plano e verso da carteirinha), \
 confira se todos concordam antes de responder; se não concordarem, reporte o mais completo e \
 explique em observacoes_divergencias. Não confunda com outros números que também aparecem perto \
@@ -1942,11 +1957,20 @@ blockquote.quote{margin:0; margin-left:5cm; font-size:11pt; line-height:1.15; te
 blockquote.quote cite{display:block; margin-top:6px; font-style:normal; font-size:11pt;}
 sup a{color:#2b5fa3; text-decoration:none; font-size:0.75em;}
 .doc-photo{margin:10px 0 18px 0; text-align:center;}
-.doc-photo img{max-width:60%; height:auto; border:1px solid #bbb;}
+/* width (nao max-width): max-width so ENCOLHE uma imagem maior que o limite
+   -- nunca AUMENTA uma menor ate la. Como cada foto/recorte vem de um
+   documento com resolucao nativa diferente (pagina inteira, recorte de
+   paragrafo, cartao da carteirinha...), max-width sozinho fazia cada imagem
+   sair num tamanho relativo bem diferente das outras (de ~10% a ~80% da
+   largura da pagina pra fotos que deveriam parecer do mesmo porte) --
+   width fixo normaliza todas pro mesmo tamanho relativo; height:auto
+   mantem a proporcao de cada uma (testado: PyMuPDF preserva a proporcao
+   corretamente mesmo com width vindo de uma regra e height:auto de outra). */
+.doc-photo img{width:60%; height:auto; border:1px solid #bbb;}
 .doc-photo-caption{font-family:Arial,Helvetica,sans-serif; font-size:9pt; color:#666; margin:4px 0 0 0; text-indent:0;}
 table.docrow{width:100%; border-collapse:collapse; margin:10px 0 18px 0;}
 table.docrow td{text-align:center; vertical-align:top; padding:0 6px;}
-table.docrow img{max-width:100%; height:auto; border:1px solid #bbb;}
+table.docrow img{width:100%; height:auto; border:1px solid #bbb;}
 """
 
 _PDF_FOOTNOTE_CSS = """

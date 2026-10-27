@@ -1,7 +1,13 @@
 anthropic
 beautifulsoup4
 flask
-pymupdf
+# Fixado: o pymupdf 2.0 (lancado depois que esse motor de PDF foi testado)
+# quebra silenciosamente o timbrado (cabecalho/rodape) de render_pdf_with_footnotes
+# -- Story.place() passa a devolver more=1 (conteudo incompleto) pra uma
+# imagem sozinha numa Story, e o cabecalho/rodape nunca chega a aparecer no
+# PDF gerado, sem nenhum erro. Testado e confirmado: 1.28.2 funciona
+# (timbrado, rodape e notas de rodape por pagina, tudo certo); 2.0 nao.
+pymupdf==1.28.2
 Pillow
 openpyxl
 gunicorn

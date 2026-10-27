@@ -286,6 +286,7 @@ SCHEMA_PROPERTIES = {
     "operadora_cnpj": _nullable_string(),
     "operadora_logradouro": _nullable_string(),
     "operadora_numero": _nullable_string(),
+    "operadora_complemento": _nullable_string(),
     "operadora_bairro": _nullable_string(),
     "operadora_cidade": _nullable_string(),
     "operadora_uf": _nullable_string(),
@@ -454,7 +455,8 @@ referência a data de hoje. Formato: só o número seguido de "anos" (ex: "16 an
 nenhuma fonte para calcular, deixe "".
 
 OPERADORA/REQUERIDA (operadora_nome, operadora_cnpj, operadora_logradouro, operadora_numero, \
-operadora_bairro, operadora_cidade, operadora_uf, operadora_cep, operadora_email) — são os \
+operadora_complemento, operadora_bairro, operadora_cidade, operadora_uf, operadora_cep, \
+operadora_email) — são os \
 dados cadastrais da PRÓPRIA OPERADORA DE PLANO DE SAÚDE (a empresa que vai ser processada, não \
 a cliente). A fonte mais confiável costuma ser um print/captura de tela de consulta pública, que \
 pode aparecer solto na pasta com nome genérico tipo "imagem.png" — reconheça pelo CONTEÚDO, não \
@@ -463,11 +465,14 @@ INSCRIÇÃO E DE SITUAÇÃO CADASTRAL" da Receita Federal, com campos como "NÚM
 (= CNPJ) e "NOME EMPRESARIAL" (= razão social, use esse para operadora_nome — não o "TÍTULO DO \
 ESTABELECIMENTO/NOME DE FANTASIA"). O endereço nesse card vem em DUAS linhas separadas, as duas \
 IMPORTANTES — não pare na primeira: uma linha de cima com "LOGRADOURO", "NÚMERO" e \
-"COMPLEMENTO" (ex: "R SANTOS DUMONT" / "2705"), e uma linha de baixo com "CEP", \
+"COMPLEMENTO" (ex: "R SANTOS DUMONT" / "2705" / "SALA 10"), e uma linha de baixo com "CEP", \
 "BAIRRO/DISTRITO", "MUNICÍPIO" e "UF". Preencha operadora_logradouro e operadora_numero com os \
 valores da linha de CIMA, e operadora_cep/operadora_bairro/operadora_cidade/operadora_uf com os \
 da linha de BAIXO — é um erro comum ler só a linha de baixo e deixar logradouro/número vazios \
-mesmo eles estando visíveis logo acima; (2) um \
+mesmo eles estando visíveis logo acima. Se o campo COMPLEMENTO da linha de cima tiver algum \
+valor (ex: sala, andar, bloco, conjunto), copie-o em operadora_complemento; se o campo \
+COMPLEMENTO estiver em branco no documento, deixe operadora_complemento como "" — não repita \
+aqui o bairro nem invente um complemento que não está escrito; (2) um \
 print de consulta de operadora na ANS, com campos como "Razão Social", "Registro ANS" e "CNPJ" \
 — serve para confirmar/cruzar operadora_nome e operadora_cnpj, mas normalmente não traz \
 endereço completo (nesse caso, o endereço continua vindo do print da Receita Federal, se \
@@ -500,19 +505,35 @@ autoestima): só inclua o que o laudo desta cliente realmente descreve.
 
 - comorbidades_fisicas_1 (deformidades físicas decorrentes da perda de peso, com base no \
 laudo do cirurgião): "abdome em avental, ptoses mamárias deformantes e assimétricas, \
-associadas à importante flacidez cutânea [...], bem como distrofias cutâneas e subcutâneas \
-em região cervical, torácica, lombar, sacral, glútea, braquial, crural e coxas \
+associadas à importante flacidez cutânea, perda da feminilidade em razão da atrofia \
+glandular mamária com acentuada ptose dermocutânea, bem como distrofias cutâneas e \
+subcutâneas em região cervical, torácica, lombar, sacral, glútea, braquial, crural e coxas \
 bilateralmente."
 
 - comorbidades_fisicas_2 (impacto funcional/higiênico da flacidez, com base no laudo do \
 cirurgião): "apresenta flacidez cutânea excessiva, que evolui constantemente com quadros de \
-intertrigo e celulites bacterianas nas dobras cutâneas [...] necessitando do uso contínuo de \
-cremes, pomadas, antissépticos e desodorantes corporais."
+intertrigo e celulites bacterianas nas dobras cutâneas, especialmente nos sulcos mamários, \
+região suprapúbica, axilas, sulcos glúteos e regiões crurais. Relata significativa \
+dificuldade para realização do asseio e da higiene íntima, bem como queixas de mau odor \
+decorrente da sudorese excessiva e do atrito entre as dobras cutâneas, necessitando do uso \
+contínuo de cremes, pomadas, antissépticos e desodorantes corporais."
 
 - comorbidades_psicologicas (impacto emocional, com base no laudo psicológico): "a \
 Requerente encontra-se em acompanhamento psicológico especializado, diante dos relevantes \
 prejuízos emocionais decorrentes das sequelas pós-bariátricas, apresentando baixa \
-autoestima, insatisfação com a própria imagem corporal [...]"
+autoestima, insatisfação com a própria imagem corporal, perda do interesse pelo convívio \
+social e comprometimento das relações íntimas, sociais e laborais em razão do dismorfismo \
+corporal ocasionado pela expressiva perda de peso."
+
+ATENÇÃO: os três exemplos acima estão completos, por extenso, de propósito — NENHUM deles tem \
+reticências ou corte no meio. Isso é intencional: eles mostram não só o TOM, mas também o NÍVEL \
+DE DETALHE esperado. Erro comum e grave aqui é RESUMIR o laudo: se o laudo descreve 5 achados ou \
+frases sobre comorbidades físicas, o campo tem que conter os 5, não uma síntese de 2. Transcreva/ \
+parafraseie o laudo de forma completa — cada região do corpo, cada sintoma, cada consequência \
+funcional que o laudo menciona precisa aparecer no campo correspondente. Nunca corte o texto só \
+para deixá-lo mais curto. Em contrapartida, NUNCA acrescente região do corpo, sintoma ou achado \
+que o laudo desta cliente não mencione, mesmo que seja comum em laudos parecidos — se não está \
+escrito no laudo, não entra no campo.
 
 REGRA DE NÃO REPETIÇÃO DAS COMORBIDADES (vale para os três campos acima): cada achado aparece em \
 UM SÓ campo. comorbidades_fisicas_1 fica restrito às DEFORMIDADES e às regiões do corpo afetadas \
@@ -572,7 +593,16 @@ SOMENTE sobre a cronologia de contatos/solicitações com a operadora — NÃO r
 descrição de comorbidades/achados médicos (isso já vai em comorbidades_fisicas_1, \
 comorbidades_fisicas_2 e comorbidades_psicologicas, campos separados); cada item de fatos_lista \
 fala do que ACONTECEU (quem contatou quem, quando, por qual canal, dizendo o quê), não do \
-quadro clínico da cliente. Por padrão, escreva como \
+quadro clínico da cliente. NÃO É CONTATO COM A OPERADORA: mensagens/e-mails/ligações trocados \
+ENTRE A CLIENTE E O PRÓPRIO ESCRITÓRIO DE ADVOCACIA (ex: a cliente envia documentos ao \
+escritório, agenda uma reunião, assina a procuração, recebe uma atualização do andamento do \
+caso, ou troca de e-mails cujo remetente/destinatário é o domínio do escritório) — isso é \
+comunicação interna do caso, não um fato da relação entre a Requerente e a Requerida (operadora), \
+e NÃO entra em fatos_lista mesmo que o arquivo esteja agrupado com os outros comprovantes de \
+contato. Antes de incluir um item, confirme que pelo menos um dos lados da comunicação é a \
+PRÓPRIA OPERADORA (ou alguém claramente agindo por ela, como um atendente ou representante do \
+plano de saúde) — se os dois lados forem a cliente e o escritório, descarte o item. Por padrão, \
+escreva como \
 se a própria Requerente tivesse feito o contato diretamente ("a Requerente entrou em \
 contato...") — só mencione que foi "por meio de representante legal" ou de outra pessoa se \
 algum documento mostrar EXPLICITAMENTE que não foi a cliente quem contatou a operadora. Estilo \
@@ -600,21 +630,25 @@ arquivo não bateu na cabeça com o tipo esperado (ex: um arquivo chamado "contr
 "CC.pdf" é o mesmo que holerite; "comprovante de rendimentos" também é holerite ou extrato, \
 dependendo do conteúdo). Por isso, faça isto ANTES de contar: LISTE mentalmente (não precisa \
 escrever no JSON) o NOME de CADA ARQUIVO deste lote, um por um, sem pular nenhum — só depois de \
-ter essa lista completa na cabeça, classifique cada arquivo dela em um dos tipos abaixo (um \
-arquivo pode não se encaixar em nenhum, tudo bem, mas não pule nenhum arquivo sem checar). Tipos \
-possíveis: (1) declaração de pobreza/hipossuficiência assinada; (2) CTPS (carteira de trabalho, \
-inclusive digital); (3) extrato(s) bancário(s) — conta como 1 tipo mesmo se houver vários meses; \
-(4) holerite(s)/contracheque(s)/comprovante(s) de pagamento de salário — idem, 1 tipo mesmo com \
-vários meses; (5) declaração de imposto de renda/IRPF; (6) planilha demonstrativa de despesas \
-mensais (tabela com categorias de gasto e valores, às vezes já convertida de Excel para imagem). \
-Primeiro (gratuidade_documentos_total): conte quantos desses 6 tipos você efetivamente encontrou \
-depois de classificar TODOS os arquivos do lote, e coloque o número aqui. Depois \
-(gratuidade_documentos_lista): um ARRAY com um item de string por tipo contado acima (ex: \
-["declaração de pobreza", "CTPS", "extratos bancários", "holerites", "planilha de despesas \
-mensais"]) — o array TEM que ter exatamente gratuidade_documentos_total itens, nem a mais nem a \
-menos. Antes de responder, confira mais uma vez: para cada tipo que você NÃO incluiu, tem \
-certeza de que nenhum arquivo do lote se encaixa nele, mesmo com nome diferente do óbvio? NÃO \
-copie um exemplo genérico nem repita sempre a mesma combinação — cada cliente tem um conjunto \
+ter essa lista completa na cabeça, classifique cada arquivo dela pelo que ele REALMENTE É. Os \
+tipos mais comuns são: declaração de pobreza/hipossuficiência assinada; CTPS (carteira de \
+trabalho, inclusive digital); extrato(s) bancário(s) (conta como 1 tipo mesmo se houver vários \
+meses); holerite(s)/contracheque(s)/comprovante(s) de pagamento de salário (idem, 1 tipo mesmo \
+com vários meses); declaração de imposto de renda/IRPF; planilha demonstrativa de despesas \
+mensais (tabela com categorias de gasto e valores, às vezes já convertida de Excel para imagem) \
+— MAS essa lista é só de EXEMPLO, não é um menu fechado: qualquer outro documento do lote que \
+sirva de prova da hipossuficiência (ex: comprovante de seguro-desemprego, declaração de \
+desempregado, conta de consumo atrasada, extrato de benefício assistencial/INSS, comprovante de \
+auxílio, fatura de cartão de crédito) TAMBÉM entra na lista, com seu próprio nome descritivo — \
+não descarte um documento só porque não é um dos exemplos acima. Primeiro \
+(gratuidade_documentos_total): depois de classificar TODOS os arquivos do lote, conte quantos \
+TIPOS DISTINTOS de prova de hipossuficiência você efetivamente encontrou, e coloque o número \
+aqui. Depois (gratuidade_documentos_lista): um ARRAY com um item de string por tipo contado \
+acima (ex: ["declaração de pobreza", "CTPS", "extratos bancários", "holerites", "planilha de \
+despesas mensais"]) — o array TEM que ter exatamente gratuidade_documentos_total itens, nem a \
+mais nem a menos. Antes de responder, confira mais uma vez, arquivo por arquivo do lote: cada um \
+está refletido em algum item da lista, ou você tem certeza de que ele não prova hipossuficiência? \
+NÃO copie um exemplo genérico nem repita sempre a mesma combinação — cada cliente tem um conjunto \
 diferente de documentos. Se tem_declaracao_gratuidade for false, deixe gratuidade_documentos_total \
 como 0 e gratuidade_documentos_lista como array vazio.
 
@@ -1250,9 +1284,29 @@ def call_batch(client, model, files, label):
         return {}
 
 
+# Campos de lista onde "a" e "b" cobrem DOCUMENTOS DIFERENTES (ver
+# _merge_pair e _unir_listas_por_lote) -- um fato/documento que só aparece
+# de um lado é informação nova, não um conflito a resolver escolhendo um
+# lado só. Perder isso silenciosamente é o bug que fazia a narrativa de
+# fatos (e a lista de comprovantes de gratuidade) sair incompleta sempre
+# que os documentos de contato/gratuidade não cabiam num único lote.
+CAMPOS_LISTA_UNIAO = ("fatos_lista", "gratuidade_documentos_lista", "procedimentos_lista")
+
+
 def _merge_pair(a, b):
+    """Junta os resultados de duas METADES de um mesmo lote que estourou o
+    limite da API (ver call_batch) -- por construção, a e b sempre viram de
+    conjuntos de arquivos DISJUNTOS, nunca de duas tentativas do mesmo
+    conjunto, então os campos de lista sempre se somam (nunca escolhe um
+    lado só, que descartaria documentos vistos apenas no outro)."""
     out = dict(a)
     for k, v in b.items():
+        if k in CAMPOS_LISTA_UNIAO:
+            existentes = out.get(k) or []
+            novos = [item for item in (v or []) if item not in existentes]
+            if existentes or novos:
+                out[k] = existentes + novos
+            continue
         if out.get(k) in (None, "", []):
             out[k] = v
     return out
@@ -1331,6 +1385,38 @@ def merge_results(all_results):
             # prevalece True.
             merged[key] = any(v is True for v in values)
             continue
+        if key in CAMPOS_LISTA_UNIAO:
+            # Cada LOTE (grupo de arquivos; ver _grupo_lote em main()/app.py)
+            # contribui com sua própria lista. Duas respostas do MESMO lote
+            # (retry de lote crítico, ver eh_lote_critico) são duas tentativas
+            # do MESMO conjunto de documentos -- escolhe a mais longa, como
+            # antes. Mas respostas de lotes DIFERENTES descrevem documentos
+            # DIFERENTES -- um fato/documento que só apareceu num lote é
+            # informação nova, não um "perdedor" a descartar; por isso a
+            # lista final é a UNIÃO (sem duplicar) da melhor resposta de cada
+            # lote, não só a resposta mais longa entre todos os lotes. Sem
+            # isso, fatos_lista/gratuidade_documentos_lista saíam incompletos
+            # sempre que os documentos de contato/gratuidade não coubessem
+            # num único lote (make_batches pode dividir esses grupos quando
+            # são grandes demais -- só "laudo" tem lote exclusivo garantido).
+            melhor_por_lote = {}
+            for r in all_results:
+                v = r.get(key)
+                if v in (None, "", []):
+                    continue
+                lote = r.get("_grupo_lote")
+                if lote not in melhor_por_lote or len(v) > len(melhor_por_lote[lote]):
+                    melhor_por_lote[lote] = v
+            escolhas = list(melhor_por_lote.values())
+            unidos = []
+            for lista in escolhas:
+                for item in lista:
+                    if item not in unidos:
+                        unidos.append(item)
+            merged[key] = unidos or None
+            if len(escolhas) > 1:
+                conflicts[key] = escolhas
+            continue
         anchor_field = _anchor_field_for(key)
         if anchor_field:
             anchored = [
@@ -1362,16 +1448,7 @@ def merge_results(all_results):
         for v in values:
             if v not in uniq:
                 uniq.append(v)
-        if key in ("procedimentos_lista", "gratuidade_documentos_lista", "fatos_lista") and len(uniq) > 1:
-            # As duas tentativas do lote critico (ver eh_lote_critico) podem
-            # divergir por variacao do proprio modelo -- entre elas, a lista
-            # mais longa tem mais chance de estar completa (o erro mais
-            # comum e faltar item, raramente sobrar), mas o conflito ainda
-            # fica registrado abaixo pra revisao humana conferir contra os
-            # documentos originais.
-            merged[key] = max(uniq, key=len)
-        else:
-            merged[key] = uniq[0]
+        merged[key] = uniq[0]
         if len(uniq) > 1:
             conflicts[key] = uniq
     merged["fatos_lista"] = _ordenar_fatos(merged.get("fatos_lista"))
@@ -1446,7 +1523,8 @@ def _drop_duplicate_urgencia_photo(merged):
 
 OPERADORA_CAMPOS = [
     "operadora_nome", "operadora_cnpj", "operadora_logradouro", "operadora_numero",
-    "operadora_bairro", "operadora_cidade", "operadora_uf", "operadora_cep", "operadora_email",
+    "operadora_complemento", "operadora_bairro", "operadora_cidade", "operadora_uf",
+    "operadora_cep", "operadora_email",
 ]
 OPERADORA_CAMPOS_OBRIGATORIOS = [
     "operadora_cnpj", "operadora_logradouro", "operadora_numero", "operadora_bairro",
@@ -1461,9 +1539,11 @@ Fontes, em ordem de confiança:
 1) Comprovante de inscrição e de situação cadastral no CNPJ (Receita Federal): "NOME EMPRESARIAL" \
 (razão social) vai em operadora_nome, e "NÚMERO DE INSCRIÇÃO" (o CNPJ) vai em operadora_cnpj. O \
 endereço vem em DUAS linhas e as duas são obrigatórias: a linha de cima traz LOGRADOURO, NÚMERO e \
-COMPLEMENTO (ex: "R SANTOS DUMONT" / "2705"); a linha de baixo traz CEP, BAIRRO/DISTRITO, \
-MUNICÍPIO e UF. Preencha logradouro e número com a linha de cima, e cep/bairro/cidade/uf com a \
-linha de baixo. Não pare na primeira linha.
+COMPLEMENTO (ex: "R SANTOS DUMONT" / "2705" / "SALA 10"); a linha de baixo traz CEP, \
+BAIRRO/DISTRITO, MUNICÍPIO e UF. Preencha logradouro e número com a linha de cima, e \
+cep/bairro/cidade/uf com a linha de baixo. Não pare na primeira linha. Se o campo COMPLEMENTO \
+tiver valor, copie-o em operadora_complemento; se estiver em branco, deixe operadora_complemento \
+como "" (não invente nem repita o bairro ali).
 2) Consulta de operadora na ANS (Razão Social, Registro ANS, CNPJ) — confirma nome e CNPJ.
 3) Carteirinha, papel timbrado de carta de negativa, rodapé de e-mail da operadora.
 
@@ -1639,16 +1719,24 @@ def _resolve_source_file(files_lookup, arquivo_name):
 
 def _achar_area_dos_trechos(pymupdf_mod, page, trechos):
     """Localiza um ou mais trechos LITERAIS de texto na pagina e devolve um
-    retangulo (com margem) cobrindo so a faixa vertical onde eles aparecem
-    -- a largura fica sempre a pagina inteira, pra nunca cortar o lado de
-    linhas mais longas do mesmo paragrafo. Devolve None (o chamador cai de
-    volta pra pagina inteira) se: nao ha trecho pra buscar, a pagina nao
-    tem camada de texto pesquisavel (comum em PDF escaneado sem OCR), ou
-    nenhum trecho foi encontrado."""
+    retangulo cobrindo o(s) PARAGRAFO(S) INTEIRO(S) (bloco de texto, via
+    page.get_text("blocks")) onde eles comecam -- a largura fica sempre a
+    pagina inteira, pra nunca cortar o lado de linhas mais longas do mesmo
+    paragrafo. Devolve None (o chamador cai de volta pra pagina inteira) se:
+    nao ha trecho pra buscar, a pagina nao tem camada de texto pesquisavel
+    (comum em PDF escaneado sem OCR), ou nenhum trecho foi encontrado.
+
+    Antes, a altura usada era so a margem fixa de +40pt abaixo da LINHA onde
+    o trecho (um recorte de 8-15 palavras do INICIO do paragrafo) foi
+    achado -- o suficiente pra poucas linhas, mas cortava no meio qualquer
+    paragrafo de laudo mais longo (comorbidades, procedimentos). Usar o
+    bloco de texto real resolve isso pro paragrafo inteiro, qualquer que
+    seja o tamanho dele, sem precisar adivinhar uma margem fixa."""
     if not trechos:
         return None
     if isinstance(trechos, str):
         trechos = [trechos]
+    blocos = page.get_text("blocks")  # cada item: (x0, y0, x1, y1, texto, ...)
     area = None
     for trecho in trechos:
         # o modelo copia o trecho do laudo, mas quebras de linha, espacos duplos
@@ -1663,11 +1751,16 @@ def _achar_area_dos_trechos(pymupdf_mod, page, trechos):
             if rects:
                 break
         for r in rects:
-            area = r if area is None else area | r
+            bloco = next(
+                (b for b in blocos if b[0] <= r.x0 <= b[2] and b[1] <= r.y0 <= b[3]),
+                None,
+            )
+            alvo = pymupdf_mod.Rect(bloco[:4]) if bloco else r
+            area = alvo if area is None else area | alvo
     if area is None:
         return None
     margem_vertical_topo = 18
-    margem_vertical_baixo = 40
+    margem_vertical_baixo = 24
     return pymupdf_mod.Rect(
         0, max(0, area.y0 - margem_vertical_topo),
         page.rect.width, min(page.rect.height, area.y1 + margem_vertical_baixo),
@@ -1840,6 +1933,7 @@ main{padding:0; line-height:1.15; font-size:13pt; font-family:Cambria,'Times New
 .cond.hide{display:none;}
 main p{margin:0 0 12px 0; text-indent:4.75cm;}
 main p.noindent{text-indent:0;}
+main p.closing-block{text-align:center;}
 h2.title{text-align:center; font-size:13pt; line-height:1.15; margin:26px 0; text-indent:0; font-weight:bold;}
 h3.sec{font-size:13pt; line-height:1.15; text-indent:0; margin:26px 0 14px 0; font-weight:bold;}
 h4.subsec{font-size:13pt; line-height:1.15; text-indent:0; margin:20px 0 12px 0; font-weight:bold;}
@@ -2179,6 +2273,16 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
 
     filled, skipped = [], []
 
+    # requerida_complemento fica FORA do field_values genérico de propósito:
+    # a maioria das operadoras não tem complemento (sala/andar/bloco), e isso
+    # é normal -- não é um dado "não encontrado" que mereça o placeholder
+    # cinza padrão. Igual ao cliente_endereco_complemento (ver
+    # build_qualificacao_partes), o valor já sai com a vírgula embutida e o
+    # span some sozinho (fica vazio) quando não há complemento.
+    complemento_operadora = (data.get("operadora_complemento") or "").strip()
+    for span in soup.select('[data-field="requerida_complemento"]'):
+        set_field_text(span, f", {complemento_operadora}" if complemento_operadora else "")
+
     nome_cliente_raw = data.get("cliente_nome_completo")
     nome, resto_qualificacao = build_qualificacao_partes(data)
     qual_spans = soup.select('[data-field="qualificacao_requerente"]')
@@ -2321,9 +2425,13 @@ def main():
     print()
     all_results = []
     for i, batch in enumerate(batches, 1):
-        all_results.append(call_batch(client, args.model, batch, str(i)))
+        r = call_batch(client, args.model, batch, str(i))
+        r["_grupo_lote"] = i
+        all_results.append(r)
         if eh_lote_critico(batch):
-            all_results.append(call_batch(client, args.model, batch, f"{i}b"))
+            r2 = call_batch(client, args.model, batch, f"{i}b")
+            r2["_grupo_lote"] = i
+            all_results.append(r2)
 
     data, conflicts = merge_results(all_results)
     completar_dados_operadora(client, args.model, files, data)

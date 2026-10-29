@@ -56,10 +56,10 @@ except ImportError:
 # WD_ALIGN_PARAGRAPH sao usados em varias funcoes auxiliares menores
 # (_docx_*) espalhadas pelo modulo, e importar em cada uma seria repetitivo.
 try:
-    from docx.shared import Pt, Cm
+    from docx.shared import Pt, Cm, Emu
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 except ImportError:
-    Pt = Cm = WD_ALIGN_PARAGRAPH = None
+    Pt = Cm = Emu = WD_ALIGN_PARAGRAPH = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_TEMPLATE = SCRIPT_DIR / "Modelo petição inicial reparadoras (2).html"
@@ -610,6 +610,26 @@ cartas de negativa, qualquer comprovante de contato ou andamento) e confirme que
 está refletido em pelo menos um item do array — não deixe nenhum documento relevante de fora só \
 porque já "parece" que a história está completa com menos itens, e não pare no meio: continue \
 até o ÚLTIMO fato/contato encontrado nos documentos, não só os primeiros dois ou três. Cada \
+FONTE OBRIGATÓRIA — fatos_lista é SOMENTE sobre a solicitação ADMINISTRATIVA da cliente \
+À OPERADORA (pedido de autorização dos procedimentos, reenvios, ligações para a central de \
+atendimento, carta/e-mail de negativa da operadora etc.), nunca sobre a comunicação entre a \
+cliente e O PRÓPRIO ESCRITÓRIO DE ADVOCACIA (ex: a cliente mandando os documentos pro escritório, \
+tirando dúvida sobre o processo, combinando uma assinatura, perguntando o andamento do caso). Um \
+print de WhatsApp ou e-mail SÓ entra neste campo se o destinatário/remetente for a OPERADORA DE \
+PLANO DE SAÚDE (ou um prestador/central agindo em nome dela) — confirme isso pelo nome/domínio de \
+quem está na conversa antes de incluir; se a troca for com o escritório (nome da advogada, domínio \
+do escritório, ou peça jurídica interna), IGNORE esse documento por completo para este campo, \
+mesmo que ele mencione os procedimentos ou a cirurgia. Quando a pasta tiver documentos NUMERADOS \
+da solicitação administrativa junto à operadora (ex: "01 - protocolo...", "02 - resposta...", \
+protocolo.pdf, comprovante_solicitacao.pdf), esses são a fonte PRINCIPAL e mais confiável desta \
+cronologia — baseie-se neles antes de qualquer outro documento, e NÃO baseie fatos_lista na mesma \
+troca de mensagens mais de uma vez. ERRO GRAVE A EVITAR: reportar o MESMO fato/contato duas vezes \
+como se fossem dois eventos diferentes (ex: o mesmo protocolo ou a mesma mensagem aparecendo em \
+dois lotes/documentos ligeiramente diferentes) — antes de incluir um item, confira se ele já não \
+é a MESMA solicitação/resposta/protocolo que outro item já cobre; se for, mantenha só um. Números \
+de protocolo são sensíveis a erro de leitura — copie cada número de protocolo EXATAMENTE como \
+aparece no documento (não arredonde nem complete dígitos) e nunca atribua o protocolo de um \
+documento a um fato de outro. Cada \
 item deve citar o CANAL (e-mail, WhatsApp, telefone, aplicativo) e a DATA daquele fato \
 específico, quando disponíveis, com o máximo de detalhe que o documento de origem permitir (não \
 generalize "entrou em contato" quando o documento tem detalhes concretos do que foi dito/\
@@ -1624,6 +1644,18 @@ def operadora_incompleta(data):
     return any(not _valor_valido(data.get(k)) for k in OPERADORA_CAMPOS_OBRIGATORIOS)
 
 
+def _operadora_precisa_mais_consulta(data):
+    """Como operadora_incompleta(), mas tambem conta operadora_email como
+    pendente -- o e-mail nao e um campo "obrigatorio" (a peticao sai correta
+    sem ele, so com o endereco), mas se ele ficou vazio so porque o lote que
+    tinha o endereco (ex: print de CNPJ) nao era o MESMO lote que tinha o
+    e-mail (ex: a carteirinha ou uma carta de negativa), completar_dados_
+    operadora nao pode parar de consultar lotes assim que o endereco
+    completar -- senao nunca chega a ver o lote que de fato tinha o
+    e-mail."""
+    return operadora_incompleta(data) or not _valor_valido(data.get("operadora_email"))
+
+
 def _call_operadora(client, model, files, label):
     print(f"  -> Consulta da operadora, lote {label}: {', '.join(f.name for f in files)}")
     content = build_content_blocks(files)
@@ -1645,7 +1677,7 @@ def _call_operadora(client, model, files, label):
 def completar_dados_operadora(client, model, files, data):
     """Preenche in-place os campos da operadora que a passada principal deixou
     vazios, consultando os lotes ate completar. Devolve o proprio `data`."""
-    if not operadora_incompleta(data):
+    if not _operadora_precisa_mais_consulta(data):
         return data
     print("  -> Dados da operadora incompletos; consultando de novo só essa parte...")
     for i, batch in enumerate(make_batches(files), 1):
@@ -1653,7 +1685,7 @@ def completar_dados_operadora(client, model, files, data):
         for k in OPERADORA_CAMPOS:
             if not _valor_valido(data.get(k)) and _valor_valido(achado.get(k)):
                 data[k] = achado[k].strip()
-        if not operadora_incompleta(data):
+        if not _operadora_precisa_mais_consulta(data):
             break
     return data
 
@@ -2122,6 +2154,15 @@ def _pdf_agrupar_doc_photos_em_tabela(soup):
         if not fotos:
             row.decompose()
             continue
+        if len(fotos) == 1:
+            # so sobrou 1 foto (ex: verso da carteirinha nao encontrado) --
+            # uma tabela de 1 coluna faria essa foto sozinha ocupar 100% da
+            # largura do conteudo (table.docrow img{width:100%}), bem maior
+            # do que o esperado (e desproporcional perto das outras fotos,
+            # todas em 60%). Sem a tabela, ela cai no <div class="doc-photo">
+            # normal e usa o mesmo tamanho-padrao de qualquer foto solta.
+            row.replace_with(fotos[0].extract())
+            continue
         table = soup.new_tag("table")
         table["class"] = "docrow"
         tr = soup.new_tag("tr")
@@ -2330,10 +2371,15 @@ def render_pdf_with_footnotes(html_content: str) -> bytes:
 # manualmente se quiser outra coisa, ja que o arquivo e totalmente editavel.
 # ---------------------------------------------------------------------------
 
-_DOCX_BODY_FONT = "Times New Roman"
+# Padrao de formatacao do escritorio em Word (pedido explicitamente, nao
+# inferido): texto normal Cambria 13; citacoes e leis (blockquote.quote, e
+# as referencias no fim, que sao da mesma familia) Cambria 11; espacamento
+# antes/depois ZERO em todo paragrafo; espacamento entre linhas multiplos
+# 1,15 (ja e o padrao da fonte "Normal" abaixo).
+_DOCX_BODY_FONT = "Cambria"
 _DOCX_BODY_SIZE_PT = 13
 _DOCX_QUOTE_SIZE_PT = 11
-_DOCX_FN_SIZE_PT = 10
+_DOCX_FN_SIZE_PT = 11
 _DOCX_CAPTION_SIZE_PT = 9
 
 
@@ -2540,8 +2586,8 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
     if nome in ("h2", "h3", "h4"):
         p = doc.add_paragraph()
         p.paragraph_format.first_line_indent = 0
-        p.paragraph_format.space_before = Pt(14)
-        p.paragraph_format.space_after = Pt(8)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
         if nome == "h2":
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         _docx_add_runs(p, tag)
@@ -2549,11 +2595,13 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
 
     if nome == "p":
         if "fn" in classes:
-            # referencia (fim do documento) -- sem indentacao, fonte menor,
-            # e com hyperlink real no link (em vez de so o texto do <a>).
+            # referencia (fim do documento) -- sem indentacao, fonte de
+            # citacao/lei (11pt, mesma categoria da blockquote no padrao do
+            # escritorio), e com hyperlink real no link (em vez de so o
+            # texto do <a>).
             p = doc.add_paragraph()
             p.paragraph_format.first_line_indent = 0
-            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.space_after = Pt(0)
             link = tag.find("a", href=True)
             if link is not None:
                 antes = link.previous_sibling
@@ -2581,7 +2629,7 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
             return
         p = doc.add_paragraph()
         p.paragraph_format.first_line_indent = 0 if "noindent" in classes else Cm(4.75)
-        p.paragraph_format.space_after = Pt(10)
+        p.paragraph_format.space_after = Pt(0)
         _docx_add_runs(p, tag)
         return
 
@@ -2589,7 +2637,7 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
         p = doc.add_paragraph()
         p.paragraph_format.left_indent = Cm(5)
         p.paragraph_format.first_line_indent = 0
-        p.paragraph_format.space_after = Pt(10)
+        p.paragraph_format.space_after = Pt(0)
         _docx_add_runs(p, tag, size_pt=_DOCX_QUOTE_SIZE_PT)
         return
 
@@ -2600,28 +2648,42 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
         doc.add_paragraph(texto)
 
 
-def _docx_set_brand_image(story, img_tag, largura):
+def _docx_set_brand_image(story, img_tag, largura_pagina, margem_esq, margem_dir):
     """Preenche o cabecalho/rodape do Word com o timbrado (mesma imagem do
     <thead>/<tfoot> do HTML) -- diferente do motor de PDF, o Word repete
     cabecalho/rodape em toda pagina sozinho, sem precisar de nenhum calculo
-    de altura por pagina."""
+    de altura por pagina. A imagem sangra a pagina INTEIRA (sem respeitar a
+    margem lateral do corpo), igual ao PDF e ao navegador -- por padrao o
+    paragrafo do cabecalho/rodape do Word fica restrito a mesma largura util
+    do corpo, entao sem a indentacao negativa abaixo a barra sairia mais
+    estreita (e com escala diferente) do que no PDF/navegador, dando a
+    impressao de um timbrado "diferente". Devolve a ALTURA real da imagem
+    nessa largura (em EMU), usada por quem chama pra reservar a margem
+    certa, ou None se nao inseriu nada."""
     if img_tag is None:
-        return
+        return None
     src = img_tag.get("src") or ""
     if not src.startswith("data:image/"):
-        return
+        return None
     try:
         dados = base64.b64decode(src.split(",", 1)[1])
     except Exception:
-        return
+        return None
     p = story.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.left_indent = Emu(-margem_esq)
+    p.paragraph_format.right_indent = Emu(-margem_dir)
     run = p.add_run()
     try:
-        run.add_picture(io.BytesIO(dados), width=largura)
+        run.add_picture(io.BytesIO(dados), width=largura_pagina)
     except Exception:
-        pass
+        return None
+    tamanho = _pdf_img_size(src)
+    if not tamanho:
+        return None
+    return int(largura_pagina * (tamanho[1] / tamanho[0]))
 
 
 def render_docx(html_content: str) -> bytes:
@@ -2656,19 +2718,34 @@ def render_docx(html_content: str) -> bytes:
     estilo.font.name = _DOCX_BODY_FONT
     estilo.font.size = Pt(_DOCX_BODY_SIZE_PT)
     estilo.paragraph_format.line_spacing = 1.15
+    estilo.paragraph_format.space_before = Pt(0)
+    estilo.paragraph_format.space_after = Pt(0)
 
     section = doc.sections[0]
     section.page_width = Cm(21.0)
     section.page_height = Cm(29.7)
     section.left_margin = Cm(1.8)
     section.right_margin = Cm(1.8)
+    # top/bottom margin e header/footer_distance sao recalculados abaixo, na
+    # altura real do timbrado (ver _docx_set_brand_image) -- um valor fixo
+    # aqui ficava ora apertado (imagem maior que a reserva, invadindo o
+    # corpo do texto) ora com sobra de espaco em branco, dependendo do
+    # timbrado de cada arquivo.
     section.top_margin = Cm(3.0)
     section.bottom_margin = Cm(2.6)
-    section.header_distance = Cm(0.4)
-    section.footer_distance = Cm(0.4)
+    section.header_distance = Cm(0.3)
+    section.footer_distance = Cm(0.3)
 
-    _docx_set_brand_image(section.header, thead_img, section.page_width)
-    _docx_set_brand_image(section.footer, tfoot_img, section.page_width)
+    altura_header = _docx_set_brand_image(
+        section.header, thead_img, section.page_width, section.left_margin, section.right_margin
+    )
+    altura_footer = _docx_set_brand_image(
+        section.footer, tfoot_img, section.page_width, section.left_margin, section.right_margin
+    )
+    if altura_header:
+        section.top_margin = Emu(int(altura_header) + int(Cm(0.6)))
+    if altura_footer:
+        section.bottom_margin = Emu(int(altura_footer) + int(Cm(0.6)))
 
     largura_conteudo = section.page_width - section.left_margin - section.right_margin
     largura_cropada = int(largura_conteudo * 0.6)

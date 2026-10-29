@@ -105,9 +105,13 @@
   .doc-photo{margin:10px 0 18px 0; text-align:center; break-inside:avoid;}
   .doc-photo img{max-width:60%; height:auto; border:1px solid #bbb; border-radius:3px; box-shadow:0 1px 3px rgba(0,0,0,.15);}
   .doc-photos-row .doc-photo img{max-width:100%;}
+  /* full-page: o recorte do trecho citado falhou e caiu pra pagina inteira --
+     60% deixa o texto minusculo e ilegivel, entao usa quase toda a largura. */
+  .doc-photo img.full-page{max-width:95%;}
   /* Nenhuma imagem sai da folha: as coladas sem bloco ficam no limite da página */
   main.petition img{max-width:100%; height:auto;}
   main.petition .doc-photo img{max-width:60%;}
+  main.petition .doc-photo img.full-page{max-width:95%;}
   main.petition .doc-photos-row .doc-photo img{max-width:100%;}
   .doc-photo-caption{font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:#666; margin:4px 0 0 0; text-indent:0;}
   .doc-photo:empty{display:none;}
@@ -152,6 +156,7 @@
 <label title="Parágrafo + foto da planilha de despesas — marcado automaticamente quando a cliente enviou a planilha"><input checked="" id="cond-planilha" type="checkbox"/> Cliente enviou planilha de despesas</label>
 <label title="Substitui todo o texto da Seção IV (Do Direito) pela argumentação específica para planos de autogestão (ex.: Fundação Cesp, Cassi, Geap) — usar quando a Requerida for operadora classificada como autogestão pela ANS"><input id="cond-autogestao" type="checkbox"/> Plano de autogestão (Fundação Cesp, Cassi etc.)</label>
 <button onclick="gerarPdfComRodape()" id="btn-pdf-rodape" title="Gera o PDF final pelo servidor, com as Referências como nota de rodapé em cada página — requer o sistema web rodando (iniciar_sistema.bat)">🖨️ Gerar PDF</button>
+<button onclick="gerarWord()" id="btn-word" title="Gera a petição em .docx (Word), totalmente editável — recomendado se precisar ajustar imagens, formatação ou quebras de página manualmente">📄 Gerar Word</button>
 </div>
 <div class="row" style="margin-top:10px;">
 <span class="hint">Edição:</span>
@@ -958,6 +963,41 @@ async function gerarPdfComRodape(){
     URL.revokeObjectURL(url);
   }catch(err){
     alert('Não foi possível gerar o PDF pelo servidor. Confira se o sistema web está rodando (iniciar_sistema.bat) e tente de novo.\n\nDetalhe: ' + err.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+}
+
+async function gerarWord(){
+  var btn = document.getElementById('btn-word');
+  var textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Gerando Word...';
+  try{
+    var html = await htmlParaEnvio();
+    if(html.length > LIMITE_ENVIO_BYTES){
+      throw new Error('A petição ficou grande demais para enviar (' + Math.round(html.length / 1048576) + ' MB). Remova algumas imagens (botão × sobre a foto) e tente de novo.');
+    }
+    var resp = await fetch('/gerar-docx', {
+      method: 'POST',
+      headers: {'Content-Type': 'text/html; charset=utf-8'},
+      body: html
+    });
+    if(!resp.ok){
+      throw new Error(await resp.text());
+    }
+    var blob = await resp.blob();
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'peticao.docx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(err){
+    alert('Não foi possível gerar o Word pelo servidor. Confira se o sistema web está rodando (iniciar_sistema.bat) e tente de novo.\n\nDetalhe: ' + err.message);
   }finally{
     btn.disabled = false;
     btn.textContent = textoOriginal;

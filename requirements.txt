@@ -10,4 +10,5 @@ flask
 pymupdf==1.28.2
 Pillow
 openpyxl
+python-docx
 gunicorn

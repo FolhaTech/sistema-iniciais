@@ -409,6 +409,23 @@ def gerar_pdf():
     )
 
 
+@app.route("/gerar-docx", methods=["POST"])
+@login_required
+def gerar_docx():
+    html_content = request.get_data(as_text=True)
+    if not html_content or "<html" not in html_content.lower():
+        abort(400, "HTML da petição não recebido.")
+    try:
+        docx_bytes = pp.render_docx(html_content)
+    except Exception as e:
+        abort(500, f"Erro ao gerar Word: {e}")
+    return Response(
+        docx_bytes,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="peticao.docx"'},
+    )
+
+
 if __name__ == "__main__":
     print("Abra no navegador: http://127.0.0.1:5000")
     app.run(host="127.0.0.1", port=5000, debug=False)

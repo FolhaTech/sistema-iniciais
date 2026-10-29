@@ -141,6 +141,14 @@ Opção A — sistema web (recomendado, mais fácil):
   (nessas, use o Ctrl+P do navegador para imprimir/salvar, sem as notas de
   rodapé).
 
+  O botão "📄 Gerar Word" gera a mesma petição em .docx, editável no Word
+  (texto, imagens, timbrado) — use quando precisar ajustar a formatação,
+  reposicionar uma imagem ou corrigir quebra de página manualmente, sem
+  depender do navegador. As referências aqui ficam numeradas no fim do
+  documento (não como nota de rodapé por página, já que o Word reflui o
+  texto sozinho a cada edição). Também só funciona com o sistema web
+  rodando (Opção A).
+
 Opção B — clique duplo em linha de comando:
   Dê duplo clique em "preencher_peticao.bat" e arraste a pasta do cliente
   para a janela que abrir, ou digite/cole o caminho da pasta e aperte Enter.

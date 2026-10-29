@@ -27,6 +27,7 @@ import base64
 import csv
 import datetime
 import html
+import io
 import json
 import os
 import re
@@ -44,11 +45,21 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 try:
-    from bs4 import BeautifulSoup, Tag
+    from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 except ImportError:
     print("Falta instalar dependencias. Rode:")
     print('  .venv\\Scripts\\python.exe -m pip install anthropic beautifulsoup4')
     sys.exit(1)
+
+# python-docx so e usado por render_docx() (botao "Gerar Word") -- import
+# protegido aqui em cima (em vez de local, como pymupdf) porque Pt/Cm/
+# WD_ALIGN_PARAGRAPH sao usados em varias funcoes auxiliares menores
+# (_docx_*) espalhadas pelo modulo, e importar em cada uma seria repetitivo.
+try:
+    from docx.shared import Pt, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+except ImportError:
+    Pt = Cm = WD_ALIGN_PARAGRAPH = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_TEMPLATE = SCRIPT_DIR / "Modelo petição inicial reparadoras (2).html"
@@ -336,6 +347,7 @@ SCHEMA_PROPERTIES = {
     "laudo_comorbidades_pagina": _nullable_string(),
     "laudo_comorbidades_trecho": _nullable_string(),
     "laudo_procedimentos_pagina": _nullable_string(),
+    "laudo_procedimentos_pagina_2": _nullable_string(),
     "laudo_urgencia_pagina": _nullable_string(),
     "laudo_urgencia_trecho": _nullable_string(),
     "laudo_psicologico_arquivo": _nullable_string(),
@@ -781,10 +793,18 @@ comorbidades_fisicas_1/2) do INÍCIO do parágrafo/frase daquela página que fal
 O sistema usa esse trecho pra recortar visualmente só aquela parte da página (em vez da página \
 inteira) — por isso precisa ser uma cópia exata que realmente exista no texto, senão o recorte \
 falha e ele cai de volta pra página inteira. Se não tiver certeza de uma cópia exata, deixe "".
-- laudo_procedimentos_pagina: página, dentro de laudo_cirurgiao_arquivo, que lista os \
-procedimentos cirúrgicos solicitados (a mesma informação usada em procedimentos_lista — não \
-precisa de um campo de trecho separado, o próprio procedimentos_lista já serve pra recortar essa \
-página).
+- laudo_procedimentos_pagina / laudo_procedimentos_pagina_2: página(s), dentro de \
+laudo_cirurgiao_arquivo, que listam os procedimentos cirúrgicos solicitados (a mesma informação \
+usada em procedimentos_lista — não precisa de um campo de trecho separado, o próprio \
+procedimentos_lista já serve pra recortar essa página). ATENÇÃO — a lista de procedimentos às \
+vezes continua de uma página para a seguinte (ex: itens 1 a 4 terminam no fim de uma página e o \
+item 5 só aparece no topo da página seguinte); se isso acontecer, preencha \
+laudo_procedimentos_pagina com a página onde está o PRIMEIRO procedimento da lista \
+(procedimentos_lista[0]) e laudo_procedimentos_pagina_2 com a página onde está o ÚLTIMO \
+(procedimentos_lista[-1]) — mesmo lote e mesma consulta, só duas páginas diferentes do mesmo \
+documento. Se a lista inteira couber numa página só, preencha laudo_procedimentos_pagina com essa \
+página e deixe laudo_procedimentos_pagina_2 como "". Nunca deixe de fora o procedimento que caiu \
+na segunda página só porque é mais fácil reportar uma página só.
 - laudo_urgencia_pagina: página, dentro de laudo_cirurgiao_arquivo, em que o médico menciona \
 EXPLICITAMENTE o caráter de urgência/essencialidade dos procedimentos (palavras como "urgente", \
 "vital", "fundamental", "imediato" referindo-se à necessidade do tratamento). NÃO é a mesma \
@@ -1322,12 +1342,35 @@ def _merge_pair(a, b):
             if existentes or novos:
                 out[k] = existentes + novos
             continue
-        if out.get(k) in (None, "", []):
+        if not _valor_valido(out.get(k)):
             out[k] = v
     return out
 
 
 BOOLEAN_FIELDS = {"menciona_lipedema", "recebeu_negativa_formal", "tem_declaracao_gratuidade"}
+
+# Apesar do prompt pedir "" quando o dado nao existe, na pratica a IA as
+# vezes escreve uma palavra no lugar de "" (ex: operadora_email virou
+# "desconhecido" numa petição real, em vez de ficar vazio e cair no aviso
+# de campo nao encontrado). Qualquer valor aqui (comparado sem acento/caixa)
+# e tratado como se fosse "" em qualquer campo de texto do schema.
+RESPOSTAS_VAZIAS_DISFARCADAS = {
+    "desconhecido", "desconhecida", "nao encontrado", "nao encontrada",
+    "nao informado", "nao informada", "nao consta", "nao identificado",
+    "nao identificada", "nao localizado", "nao localizada", "indisponivel",
+    "nenhum", "nenhuma", "n/a", "na", "nao se aplica", "sem informacao",
+    "nao ha", "nao disponivel", "-", "--", "???",
+}
+
+
+def _valor_valido(v):
+    """False para "", None, [] e para as respostas-vazias-disfarcadas acima
+    (string). Demais tipos (bool, int, list nao vazia) passam direto."""
+    if v in (None, "", []):
+        return False
+    if isinstance(v, str) and _normalize_text(v) in RESPOSTAS_VAZIAS_DISFARCADAS:
+        return False
+    return True
 
 # Grupos de campos que so fazem sentido vir do MESMO lote que tambem viu um
 # documento-fonte especifico (a "ancora" do grupo). Sem essa checagem
@@ -1344,7 +1387,7 @@ ANCHORED_FIELD_GROUPS = [
     ("procedimentos_lista", {
         "peso_perdido_kg", "medico_nome_crm",
         "laudo_cirurgiao_arquivo", "laudo_comorbidades_pagina",
-        "laudo_procedimentos_pagina", "laudo_urgencia_pagina",
+        "laudo_procedimentos_pagina", "laudo_procedimentos_pagina_2", "laudo_urgencia_pagina",
     }),
     # so da pra escrever o paragrafo de danos psicologicos lendo o laudo
     # psicologico de verdade.
@@ -1392,7 +1435,7 @@ def merge_results(all_results):
         values = []
         for r in all_results:
             v = r.get(key)
-            if v not in (None, "", []):
+            if _valor_valido(v):
                 values.append(v)
         if key in BOOLEAN_FIELDS:
             # Um lote sem os documentos relevantes tende a responder False; isso
@@ -1417,7 +1460,7 @@ def merge_results(all_results):
             melhor_por_lote = {}
             for r in all_results:
                 v = r.get(key)
-                if v in (None, "", []):
+                if not _valor_valido(v):
                     continue
                 lote = r.get("_grupo_lote")
                 if lote not in melhor_por_lote or len(v) > len(melhor_por_lote[lote]):
@@ -1436,8 +1479,8 @@ def merge_results(all_results):
         if anchor_field:
             anchored = [
                 r.get(key) for r in all_results
-                if r.get(key) not in (None, "", [])
-                and r.get(anchor_field) not in (None, "", [])
+                if _valor_valido(r.get(key))
+                and _valor_valido(r.get(anchor_field))
             ]
             if anchored:
                 uniq_anchored = list(dict.fromkeys(anchored))
@@ -1450,7 +1493,7 @@ def merge_results(all_results):
             # nenhum valor).
         if key in FIRST_BATCH_PREFERRED_FIELDS and all_results:
             primeiro = all_results[0].get(key)
-            if primeiro not in (None, "", []):
+            if _valor_valido(primeiro):
                 merged[key] = primeiro
                 outros = [v for v in values if v != primeiro]
                 if outros:
@@ -1578,7 +1621,7 @@ OPERADORA_SCHEMA = {
 
 
 def operadora_incompleta(data):
-    return any(not (data.get(k) or "").strip() for k in OPERADORA_CAMPOS_OBRIGATORIOS)
+    return any(not _valor_valido(data.get(k)) for k in OPERADORA_CAMPOS_OBRIGATORIOS)
 
 
 def _call_operadora(client, model, files, label):
@@ -1608,7 +1651,7 @@ def completar_dados_operadora(client, model, files, data):
     for i, batch in enumerate(make_batches(files), 1):
         achado = _call_operadora(client, model, batch, str(i))
         for k in OPERADORA_CAMPOS:
-            if not (data.get(k) or "").strip() and (achado.get(k) or "").strip():
+            if not _valor_valido(data.get(k)) and _valor_valido(achado.get(k)):
                 data[k] = achado[k].strip()
         if not operadora_incompleta(data):
             break
@@ -1882,8 +1925,75 @@ def _insert_one_photo(soup, files_lookup, slot_id, arquivo_valor, pagina_valor, 
     img = soup.new_tag("img")
     img["src"] = f"data:{media_type};base64,{b64}"
     img["alt"] = caption
+    if not recortada:
+        # pagina inteira (nao um recorte do trecho) precisa de mais largura
+        # pra ficar legivel -- ver .doc-photo img.full-page no CSS.
+        img["class"] = "full-page"
     div.clear()
     div.append(img)
+    cap = soup.new_tag("p")
+    cap["class"] = "doc-photo-caption"
+    cap.string = caption
+    div.append(cap)
+    return True
+
+
+def _insert_procedimentos_photo(soup, files_lookup, slot_id, arquivo_valor, pagina_valor,
+                                 pagina2_valor, caption, procedimentos, paginas_inteiras_usadas):
+    """Caso especial de _insert_one_photo pra "laudo_procedimentos": a lista de
+    procedimentos às vezes continua da página X pra página X+1 do laudo (ex:
+    itens 1-4 terminam no fim de uma página, item 5 só aparece no topo da
+    seguinte) -- um recorte de UMA página só então mostra a lista cortada,
+    faltando o(s) último(s) item(ns). Se laudo_procedimentos_pagina_2 veio
+    preenchido (página diferente da primeira), recorta as DUAS páginas (a
+    primeira pelo primeiro procedimento, a segunda pelo último) e empilha as
+    duas imagens no mesmo bloco .doc-photo, uma embaixo da outra."""
+    div = soup.find("div", attrs={"data-photo": slot_id})
+    if div is None:
+        return None
+    path = _resolve_source_file(files_lookup, arquivo_valor)
+    if path is None or not procedimentos:
+        if div is not None:
+            div.decompose()
+        return False
+
+    pagina1_num = re.sub(r"\D", "", str(pagina_valor or "")) or None
+    pagina2_num = re.sub(r"\D", "", str(pagina2_valor or "")) or None
+    paginas_distintas = bool(pagina2_num) and pagina2_num != pagina1_num
+
+    if paginas_distintas:
+        partes = [
+            (pagina_valor, [procedimentos[0]]),
+            (pagina2_valor, [procedimentos[-1]]),
+        ]
+    else:
+        # tudo numa pagina so -- recorta do primeiro ao ultimo item, como
+        # antes (cobre a lista inteira mesmo quando e longa, em vez de uma
+        # margem fixa que podia cortar o fim).
+        partes = [(pagina_valor, [procedimentos[0], procedimentos[-1]] if len(procedimentos) > 1 else [procedimentos[0]])]
+
+    imgs_inseridas = 0
+    div.clear()
+    for pagina, trechos in partes:
+        b64, media_type, recortada = _render_doc_photo_base64(path, pagina, trechos)
+        if not b64:
+            continue
+        if not recortada:
+            chave = (path.as_posix(), re.sub(r"\D", "", str(pagina or "")) or "1")
+            if chave in paginas_inteiras_usadas:
+                continue
+            paginas_inteiras_usadas.add(chave)
+        img = soup.new_tag("img")
+        img["src"] = f"data:{media_type};base64,{b64}"
+        img["alt"] = caption
+        if not recortada:
+            img["class"] = "full-page"
+        div.append(img)
+        imgs_inseridas += 1
+
+    if not imgs_inseridas:
+        div.decompose()
+        return False
     cap = soup.new_tag("p")
     cap["class"] = "doc-photo-caption"
     cap.string = caption
@@ -1898,13 +2008,16 @@ def _insert_doc_photos(soup, data, files):
     procedimentos = data.get("procedimentos_lista") or []
     for slot_id, arquivo_field, pagina_field, caption, trecho_field in PHOTO_SLOTS:
         if slot_id == "laudo_procedimentos":
-            # a "citacao" aqui e a lista inteira, nao um campo de texto so --
-            # busca pelo primeiro E o ultimo procedimento e recorta a faixa
-            # que cobre os dois, capturando a lista completa mesmo quando
-            # ela e longa (em vez de uma margem fixa que podia cortar o fim).
-            trechos = [procedimentos[0], procedimentos[-1]] if procedimentos else None
-        else:
-            trechos = data.get(trecho_field) if trecho_field else None
+            resultado = _insert_procedimentos_photo(
+                soup, files_lookup, slot_id, data.get(arquivo_field), data.get(pagina_field),
+                data.get("laudo_procedimentos_pagina_2"), caption, procedimentos,
+                paginas_inteiras_usadas,
+            )
+            if resultado is None:
+                continue
+            (filled if resultado else skipped).append(slot_id)
+            continue
+        trechos = data.get(trecho_field) if trecho_field else None
         resultado = _insert_one_photo(
             soup, files_lookup, slot_id, data.get(arquivo_field), data.get(pagina_field), caption, trechos,
             paginas_inteiras_usadas=paginas_inteiras_usadas,
@@ -1967,6 +2080,11 @@ sup a{color:#2b5fa3; text-decoration:none; font-size:0.75em;}
    mantem a proporcao de cada uma (testado: PyMuPDF preserva a proporcao
    corretamente mesmo com width vindo de uma regra e height:auto de outra). */
 .doc-photo img{width:60%; height:auto; border:1px solid #bbb;}
+/* full-page: o recorte do trecho falhou (PDF escaneado sem texto pesquisavel,
+   ou o trecho literal nao bateu) e caiu pra pagina inteira -- 60% deixa o
+   texto da pagina inteira ilegivel (minusculo), entao essas usam quase toda
+   a largura disponivel pra compensar. */
+.doc-photo img.full-page{width:95%;}
 .doc-photo-caption{font-family:Arial,Helvetica,sans-serif; font-size:9pt; color:#666; margin:4px 0 0 0; text-indent:0;}
 table.docrow{width:100%; border-collapse:collapse; margin:10px 0 18px 0;}
 table.docrow td{text-align:center; vertical-align:top; padding:0 6px;}
@@ -2128,6 +2246,16 @@ def render_pdf_with_footnotes(html_content: str) -> bytes:
     main = soup.find("main", class_="petition") or soup.find("main")
     if main is None:
         raise ValueError('Modelo sem <main class="petition"> -- não é possível gerar o PDF.')
+    # sup.note sao os icones 🛈 de nota INTERNA da equipe (title com instrucao
+    # de preenchimento) -- no navegador, o CSS @media print os esconde, mas
+    # este motor de PDF nao usa aquele CSS (tem o seu proprio, _PDF_BODY_CSS)
+    # e ate agora deixava o emoji vazar pro PDF final como um glifo quebrado
+    # (a fonte do corpo nao tem esse emoji), logo depois de titulos como
+    # "III) - DOS FATOS". Precisam ser removidos ANTES das citacoes de
+    # referencia serem marcadas acima, porque sup.note e sup.cite citacao sao
+    # a mesma tag <sup> em contextos diferentes.
+    for nota_interna in main.find_all("sup", class_="note"):
+        nota_interna.decompose()
     _pdf_agrupar_doc_photos_em_tabela(main)
     body_html = str(main)
 
@@ -2182,6 +2310,379 @@ def render_pdf_with_footnotes(html_content: str) -> bytes:
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Geracao do Word (.docx) -- pedido mais frequente dos advogados: poder
+# ajustar a formatacao (imagens, quebras de pagina, paragrafos) direto no
+# Word, sem precisar reabrir o navegador/reconverter o PDF a cada ajuste
+# fino. Converte a MESMA arvore HTML (ja com os campos preenchidos/editados
+# na tela) em paragrafos/imagens/tabelas nativos do docx, em vez de gerar um
+# PDF e tentar "importa-lo" de volta (perderia a edicao nativa, que e
+# exatamente o que se pediu).
+#
+# Diferenca de proposito em relacao ao PDF: no PDF a nota de rodape (classe
+# "Referencias") e calculada pra cair na pagina exata da citacao (ver
+# render_pdf_with_footnotes acima, com todo aquele algoritmo de
+# convergencia). Aqui isso seria inutil -- o Word reflui o texto sozinho
+# toda vez que alguem edita, entao qualquer posicionamento fixo calculado
+# agora ficaria errado no minuto seguinte. As referencias entram como uma
+# secao numerada no fim do documento (com link clicavel), do jeito que
+# qualquer petição em Word normalmente traz -- e o advogado que reposicionar
+# manualmente se quiser outra coisa, ja que o arquivo e totalmente editavel.
+# ---------------------------------------------------------------------------
+
+_DOCX_BODY_FONT = "Times New Roman"
+_DOCX_BODY_SIZE_PT = 13
+_DOCX_QUOTE_SIZE_PT = 11
+_DOCX_FN_SIZE_PT = 10
+_DOCX_CAPTION_SIZE_PT = 9
+
+
+def _docx_add_hyperlink(paragraph, url, text, size_pt=None):
+    """Hyperlink real (clicavel, azul, sublinhado) -- python-docx nao tem um
+    metodo pronto pra isso, e o jeito documentado e montar o XML (w:hyperlink
+    com relacionamento externo) na mao."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    part = paragraph.part
+    r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+    run_elem = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "2B5FA3")
+    rpr.append(color)
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    rpr.append(underline)
+    if size_pt:
+        sz = OxmlElement("w:sz")
+        sz.set(qn("w:val"), str(int(size_pt * 2)))
+        rpr.append(sz)
+    run_elem.append(rpr)
+    t = OxmlElement("w:t")
+    t.text = text
+    t.set(qn("xml:space"), "preserve")
+    run_elem.append(t)
+    hyperlink.append(run_elem)
+    paragraph._p.append(hyperlink)
+
+
+def _docx_add_runs(paragraph, node, bold=False, italic=False, underline=False, size_pt=None):
+    """Percorre recursivamente os filhos de `node` (uma Tag do BeautifulSoup)
+    adicionando runs de texto no paragrafo docx, carregando negrito/italico/
+    sublinhado herdados das tags ancestrais (strong/b, em/i, u). <sup
+    class="note"> (dica interna da equipe) nunca aparece no documento final
+    -- mesmo tratamento do PDF. <sup><a href="#notaN"> (citacao) vira so o
+    numero, em sobrescrito. <br> e <cite> (dentro de blockquote) viram quebra
+    de linha dentro do MESMO paragrafo, nao um paragrafo novo -- mantem a
+    citação como um bloco visual so, igual ao HTML original."""
+    from docx.enum.text import WD_BREAK
+
+    for child in node.children:
+        if isinstance(child, Comment):
+            continue
+        if isinstance(child, NavigableString):
+            texto = str(child)
+            if texto:
+                run = paragraph.add_run(texto)
+                run.bold, run.italic, run.underline = bold, italic, underline
+                if size_pt:
+                    run.font.size = Pt(size_pt)
+            continue
+        if not isinstance(child, Tag):
+            continue
+        nome = child.name
+        classes = child.get("class") or []
+        if nome == "sup" and "note" in classes:
+            continue
+        if nome == "br":
+            paragraph.add_run().add_break(WD_BREAK.LINE)
+            continue
+        if nome == "cite":
+            paragraph.add_run().add_break(WD_BREAK.LINE)
+            _docx_add_runs(paragraph, child, bold, italic, underline, size_pt)
+            continue
+        if nome == "sup":
+            run = paragraph.add_run(child.get_text())
+            run.bold, run.italic, run.underline = bold, italic, underline
+            run.font.superscript = True
+            if size_pt:
+                run.font.size = Pt(size_pt)
+            continue
+        nb, ni, nu = bold, italic, underline
+        if nome in ("strong", "b"):
+            nb = True
+        if nome in ("em", "i"):
+            ni = True
+        if nome == "u":
+            nu = True
+        _docx_add_runs(paragraph, child, nb, ni, nu, size_pt)
+
+
+def _docx_insert_picture(doc, img_tag, largura_cropada, largura_full_page):
+    """Insere a imagem de um <img> (data URI base64) centralizada, com a
+    largura cheia (full-page, quando o recorte do trecho falhou -- ver
+    classe "full-page" aplicada em _insert_one_photo/_insert_procedimentos_photo)
+    ou a largura de recorte (menor, pra foto/trecho especifico). Devolve
+    True se inseriu."""
+    src = img_tag.get("src") or ""
+    if not src.startswith("data:image/"):
+        return False
+    try:
+        dados = base64.b64decode(src.split(",", 1)[1])
+    except Exception:
+        return False
+    par = doc.add_paragraph()
+    par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    par.paragraph_format.first_line_indent = 0
+    classes = img_tag.get("class") or []
+    largura = largura_full_page if "full-page" in classes else largura_cropada
+    run = par.add_run()
+    try:
+        run.add_picture(io.BytesIO(dados), width=largura)
+    except Exception:
+        return False
+    return True
+
+
+def _docx_insert_doc_photo(doc, div, largura_cropada, largura_full_page):
+    img = div.find("img")
+    if img is None:
+        return
+    if not _docx_insert_picture(doc, img, largura_cropada, largura_full_page):
+        return
+    legenda = div.find("p", class_="doc-photo-caption")
+    if legenda is not None:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.first_line_indent = 0
+        p.paragraph_format.space_after = Pt(10)
+        run = p.add_run(legenda.get_text())
+        run.italic = True
+        run.font.size = Pt(_DOCX_CAPTION_SIZE_PT)
+
+
+def _docx_insert_doc_photos_row(doc, row, largura_coluna):
+    """div.doc-photos-row no navegador usa flex pra por as fotos lado a lado
+    (ex: frente/verso da carteirinha) -- aqui vira uma tabela sem bordas, uma
+    coluna por foto, pra manter o mesmo lado-a-lado no Word."""
+    fotos = [f for f in row.find_all("div", class_="doc-photo", recursive=False) if f.find("img")]
+    if not fotos:
+        return
+    table = doc.add_table(rows=1, cols=len(fotos))
+    table.autofit = True
+    for cell, foto in zip(table.rows[0].cells, fotos):
+        img = foto.find("img")
+        src = img.get("src") or "" if img is not None else ""
+        if not src.startswith("data:image/"):
+            continue
+        try:
+            dados = base64.b64decode(src.split(",", 1)[1])
+        except Exception:
+            continue
+        p = cell.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        try:
+            run.add_picture(io.BytesIO(dados), width=largura_coluna)
+        except Exception:
+            continue
+        legenda = foto.find("p", class_="doc-photo-caption")
+        if legenda is not None:
+            pc = cell.add_paragraph()
+            pc.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            rc = pc.add_run(legenda.get_text())
+            rc.italic = True
+            rc.font.size = Pt(_DOCX_CAPTION_SIZE_PT)
+    # linha em branco depois da tabela, pra nao colar o proximo paragrafo nela
+    doc.add_paragraph()
+
+
+_DOCX_HREF_NOTA_RE = re.compile(r"^#nota\d+$")
+
+
+def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
+    """Renderiza um filho direto de <main> (ou de um wrapper transparente
+    como div.cond/div.endnotes/div[data-field-list]) como um ou mais
+    paragrafos/imagens/tabelas do docx. div.cond com a classe "hide" (secao
+    condicional desmarcada no painel) e omitido por inteiro -- a petição em
+    Word reflete exatamente o que o advogado deixou visivel na tela."""
+    if isinstance(tag, Comment):
+        return
+    if isinstance(tag, NavigableString):
+        texto = str(tag).strip()
+        if texto:
+            doc.add_paragraph(texto)
+        return
+    if not isinstance(tag, Tag):
+        return
+    nome = tag.name
+    classes = tag.get("class") or []
+
+    if nome == "div":
+        if "hide" in classes:
+            return
+        if "doc-photo" in classes:
+            _docx_insert_doc_photo(doc, tag, largura_cropada, largura_full_page)
+            return
+        if "doc-photos-row" in classes:
+            _docx_insert_doc_photos_row(doc, tag, largura_cropada)
+            return
+        # wrapper transparente (cond, endnotes, data-field-list, etc.) -- so
+        # repassa os filhos, sem criar paragrafo proprio pra div em si.
+        for filho in tag.children:
+            _docx_render_block(doc, filho, largura_cropada, largura_full_page)
+        return
+
+    if nome in ("h2", "h3", "h4"):
+        p = doc.add_paragraph()
+        p.paragraph_format.first_line_indent = 0
+        p.paragraph_format.space_before = Pt(14)
+        p.paragraph_format.space_after = Pt(8)
+        if nome == "h2":
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _docx_add_runs(p, tag)
+        return
+
+    if nome == "p":
+        if "fn" in classes:
+            # referencia (fim do documento) -- sem indentacao, fonte menor,
+            # e com hyperlink real no link (em vez de so o texto do <a>).
+            p = doc.add_paragraph()
+            p.paragraph_format.first_line_indent = 0
+            p.paragraph_format.space_after = Pt(4)
+            link = tag.find("a", href=True)
+            if link is not None:
+                antes = link.previous_sibling
+                # texto antes do link (ex: "1. Jornal da USP. ... Disponível em: ")
+                acumulado = ""
+                for sib in tag.children:
+                    if sib is link:
+                        break
+                    acumulado += sib.get_text() if isinstance(sib, Tag) else str(sib)
+                if acumulado:
+                    r = p.add_run(acumulado)
+                    r.font.size = Pt(_DOCX_FN_SIZE_PT)
+                _docx_add_hyperlink(p, link["href"], link.get_text(), size_pt=_DOCX_FN_SIZE_PT)
+                depois = link.next_sibling
+                if depois:
+                    cauda = "".join(
+                        s.get_text() if isinstance(s, Tag) else str(s)
+                        for s in list(tag.children)[list(tag.children).index(link) + 1:]
+                    )
+                    if cauda.strip():
+                        r2 = p.add_run(cauda)
+                        r2.font.size = Pt(_DOCX_FN_SIZE_PT)
+            else:
+                _docx_add_runs(p, tag, size_pt=_DOCX_FN_SIZE_PT)
+            return
+        p = doc.add_paragraph()
+        p.paragraph_format.first_line_indent = 0 if "noindent" in classes else Cm(4.75)
+        p.paragraph_format.space_after = Pt(10)
+        _docx_add_runs(p, tag)
+        return
+
+    if nome == "blockquote":
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent = Cm(5)
+        p.paragraph_format.first_line_indent = 0
+        p.paragraph_format.space_after = Pt(10)
+        _docx_add_runs(p, tag, size_pt=_DOCX_QUOTE_SIZE_PT)
+        return
+
+    # tag solta nao mapeada (ex: tabela colada de outro lugar) -- melhor
+    # preservar o texto corrido do que perder o conteudo silenciosamente.
+    texto = tag.get_text(" ", strip=True)
+    if texto:
+        doc.add_paragraph(texto)
+
+
+def _docx_set_brand_image(story, img_tag, largura):
+    """Preenche o cabecalho/rodape do Word com o timbrado (mesma imagem do
+    <thead>/<tfoot> do HTML) -- diferente do motor de PDF, o Word repete
+    cabecalho/rodape em toda pagina sozinho, sem precisar de nenhum calculo
+    de altura por pagina."""
+    if img_tag is None:
+        return
+    src = img_tag.get("src") or ""
+    if not src.startswith("data:image/"):
+        return
+    try:
+        dados = base64.b64decode(src.split(",", 1)[1])
+    except Exception:
+        return
+    p = story.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run()
+    try:
+        run.add_picture(io.BytesIO(dados), width=largura)
+    except Exception:
+        pass
+
+
+def render_docx(html_content: str) -> bytes:
+    """Gera a petição em .docx a partir do MESMO HTML ja preenchido/editado
+    na tela (igual o /gerar-pdf recebe) -- texto, imagens e timbrado viram
+    paragrafos/imagens nativos do Word, totalmente editaveis (inclusive
+    reposicionar imagem, ajustar quebra de pagina etc. direto no Word, sem
+    precisar voltar pro navegador)."""
+    if Pt is None:
+        raise RuntimeError(
+            "A biblioteca python-docx não está instalada neste servidor. Rode: "
+            "pip install python-docx (veja requirements.txt)."
+        )
+    from docx import Document
+
+    soup = BeautifulSoup(html_content, "html.parser")
+    toolbar = soup.find("div", class_="toolbar")
+    if toolbar is not None:
+        toolbar.decompose()
+
+    main = soup.find("main", class_="petition") or soup.find("main")
+    if main is None:
+        raise ValueError('Modelo sem <main class="petition"> -- não é possível gerar o Word.')
+    for nota_interna in main.find_all("sup", class_="note"):
+        nota_interna.decompose()
+
+    thead_img = soup.select_one("thead img")
+    tfoot_img = soup.select_one("tfoot img")
+
+    doc = Document()
+    estilo = doc.styles["Normal"]
+    estilo.font.name = _DOCX_BODY_FONT
+    estilo.font.size = Pt(_DOCX_BODY_SIZE_PT)
+    estilo.paragraph_format.line_spacing = 1.15
+
+    section = doc.sections[0]
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
+    section.left_margin = Cm(1.8)
+    section.right_margin = Cm(1.8)
+    section.top_margin = Cm(3.0)
+    section.bottom_margin = Cm(2.6)
+    section.header_distance = Cm(0.4)
+    section.footer_distance = Cm(0.4)
+
+    _docx_set_brand_image(section.header, thead_img, section.page_width)
+    _docx_set_brand_image(section.footer, tfoot_img, section.page_width)
+
+    largura_conteudo = section.page_width - section.left_margin - section.right_margin
+    largura_cropada = int(largura_conteudo * 0.6)
+    largura_full_page = int(largura_conteudo * 0.95)
+    largura_coluna = int(largura_conteudo * 0.46)  # duas colunas + respiro entre elas
+
+    for filho in main.children:
+        _docx_render_block(doc, filho, largura_cropada, largura_full_page)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 # Quando um campo nao e encontrado, o span NAO fica intocado com o texto de
 # exemplo do modelo (isso ja causou petição real com "REGIONAL DA LAPA" --
 # um foro plausivel mas errado, porque o campo tinha ficado sem preencher e
@@ -2203,6 +2704,28 @@ _BLANK_HINT_PADRAO = "[dado não encontrado nos documentos — preencher manualm
 
 _NUMERAIS_ROMANOS = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"]
 
+# O prompt pede pra IA nao numerar os itens (a numeracao e nossa), mas na
+# pratica o laudo de origem costuma ja ter cada item numerado/pontuado (ex:
+# "1- Dermolipectomia...", "(i)Mamoplastia...", ". Gluteoplastia...") e a IA
+# as vezes copia esse prefixo junto -- daí "(i) (i)Dermolipectomia" (numeral
+# nosso + numeral copiado) ou "(iv) . Dermolipectomia" (numeral nosso +
+# pontuacao solta). Tira qualquer marcador desse tipo do INICIO do item antes
+# de aplicar nossa propria numeracao.
+_MARCADOR_ITEM_RE = re.compile(
+    r"^(?:\(\s*(?:[ivxIVX]{1,4}|\d{1,2})\s*\)[\.\-:]?\s*"  # (i) / (I) / (1) + opcional . - :
+    r"|\d{1,2}[\.\-:\)]\s*"                                 # 1- / 1. / 1) / 1:
+    r"|[\.\-:;]+\s*)"                                       # pontuacao solta no inicio
+)
+
+
+def _limpar_item_procedimento(item):
+    item = (item or "").strip()
+    anterior = None
+    while anterior != item:
+        anterior = item
+        item = _MARCADOR_ITEM_RE.sub("", item, count=1).strip()
+    return item
+
 
 def _formatar_procedimentos(lista):
     """procedimentos_lista vem da IA como array (um item por procedimento,
@@ -2212,7 +2735,7 @@ def _formatar_procedimentos(lista):
         return None
     itens = []
     for idx, item in enumerate(lista):
-        item = (item or "").strip()
+        item = _limpar_item_procedimento(item)
         if not item:
             continue
         numeral = _NUMERAIS_ROMANOS[idx] if idx < len(_NUMERAIS_ROMANOS) else str(idx + 1)

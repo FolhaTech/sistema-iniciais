@@ -550,8 +550,13 @@ relettrarPedidos();
 // Edição livre: formatação, imagens (inserir/remover) e envio do PDF.
 // ---------------------------------------------------------------------------
 var LADO_MAX_IMAGEM_PX = 1600;   // lado maior das fotos ao reduzir (legível e leve)
-var LIMITE_REDUZIR_BYTES = 200000; // imagens menores que isso são enviadas como estão
-var LIMITE_ENVIO_BYTES = 4000000;  // margem abaixo do limite de ~4,5 MB do Vercel
+var LIMITE_REDUZIR_BYTES = 150000; // imagens menores que isso são enviadas como estão
+var ALVO_IMAGEM_BYTES = 350000;    // teto por imagem (base64) após reduzir -- ver reduzirImagem()
+var LIMITE_ENVIO_BYTES = 3500000;  // margem mais folgada abaixo do limite real (~4,5 MB) do Vercel --
+                                    // 4,5 MB é o tamanho REAL em bytes do corpo da requisição, então a
+                                    // comparação precisa medir bytes de verdade (ver htmlParaBytes()),
+                                    // não o .length da string (que mede caracteres, não bytes, e
+                                    // subestima o texto acentuado em português)
 
 function acaoFormato(comando){
   document.execCommand(comando, false, null);
@@ -570,7 +575,7 @@ document.addEventListener('selectionchange', function(){
 });
 
 // Reduz uma imagem (URL ou blob) para JPEG com lado maior <= maxLado.
-function reduzirImagem(origem, maxLado){
+function reduzirImagem(origem, maxLado, alvoBytes){
   return new Promise(function(resolve, reject){
     var img = new Image();
     img.onload = function(){
@@ -583,11 +588,32 @@ function reduzirImagem(origem, maxLado){
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
+      var qualidade = 0.85;
+      var saida = canvas.toDataURL('image/jpeg', qualidade);
+      // Uma unica passada em qualidade fixa podia deixar uma foto de scan
+      // (muito detalhe/texto) ainda grande mesmo depois do redimensionamento
+      // -- baixa a qualidade em passos ate caber no alvo ou chegar num piso
+      // ainda legivel (nunca trava: no maximo 6 tentativas).
+      if(alvoBytes){
+        var tentativas = 0;
+        while(saida.length > alvoBytes && qualidade > 0.4 && tentativas < 6){
+          qualidade -= 0.1;
+          saida = canvas.toDataURL('image/jpeg', qualidade);
+          tentativas++;
+        }
+      }
+      resolve(saida);
     };
     img.onerror = function(){ reject(new Error('Não foi possível ler esta imagem.')); };
     img.src = origem;
   });
+}
+
+// Tamanho REAL em bytes (UTF-8) da petição pronta pra envio -- .length conta
+// caracteres (UTF-16), nao bytes, e subestima o texto acentuado em
+// portugues; o limite do Vercel e em bytes de verdade.
+function htmlParaBytes(html){
+  return new Blob([html]).size;
 }
 
 // Botões da foto: − e + mudam a largura (passos de 10%), × remove o bloco.
@@ -755,7 +781,7 @@ async function inserirArquivos(arquivos){
       } else {
         var url = URL.createObjectURL(f);
         try{
-          srcs.push(await reduzirImagem(url, LADO_MAX_IMAGEM_PX));
+          srcs.push(await reduzirImagem(url, LADO_MAX_IMAGEM_PX, ALVO_IMAGEM_BYTES));
         }finally{
           URL.revokeObjectURL(url);
         }
@@ -924,7 +950,7 @@ async function htmlParaEnvio(){
   for(var i = 0; i < imgs.length; i++){
     var src = imgs[i].getAttribute('src') || '';
     if(src.indexOf('data:image/') !== 0 || src.length < LIMITE_REDUZIR_BYTES) continue;
-    imgs[i].setAttribute('src', await reduzirImagem(src, LADO_MAX_IMAGEM_PX));
+    imgs[i].setAttribute('src', await reduzirImagem(src, LADO_MAX_IMAGEM_PX, ALVO_IMAGEM_BYTES));
   }
   return '<!DOCTYPE html>\n' + copia.outerHTML;
 }
@@ -941,8 +967,9 @@ async function gerarPdfComRodape(){
   btn.textContent = 'Gerando PDF...';
   try{
     var html = await htmlParaEnvio();
-    if(html.length > LIMITE_ENVIO_BYTES){
-      throw new Error('A petição ficou grande demais para enviar (' + Math.round(html.length / 1048576) + ' MB). Remova algumas imagens (botão × sobre a foto) e tente de novo.');
+    var tamanhoBytes = htmlParaBytes(html);
+    if(tamanhoBytes > LIMITE_ENVIO_BYTES){
+      throw new Error('A petição ficou grande demais para enviar (' + Math.round(tamanhoBytes / 1048576) + ' MB). Remova algumas imagens (botão × sobre a foto) e tente de novo.');
     }
     var resp = await fetch('/gerar-pdf', {
       method: 'POST',
@@ -976,8 +1003,9 @@ async function gerarWord(){
   btn.textContent = 'Gerando Word...';
   try{
     var html = await htmlParaEnvio();
-    if(html.length > LIMITE_ENVIO_BYTES){
-      throw new Error('A petição ficou grande demais para enviar (' + Math.round(html.length / 1048576) + ' MB). Remova algumas imagens (botão × sobre a foto) e tente de novo.');
+    var tamanhoBytes = htmlParaBytes(html);
+    if(tamanhoBytes > LIMITE_ENVIO_BYTES){
+      throw new Error('A petição ficou grande demais para enviar (' + Math.round(tamanhoBytes / 1048576) + ' MB). Remova algumas imagens (botão × sobre a foto) e tente de novo.');
     }
     var resp = await fetch('/gerar-docx', {
       method: 'POST',

@@ -103,11 +103,18 @@ SUPPORTED_EXT = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
 }
-# Extensoes aceitas so no UPLOAD (nunca mandadas direto pra IA) -- .xlsx e
-# convertido pra .png por _converter_planilhas_para_imagem() antes de
-# find_documents() rodar; sem essa lista, app.py descartaria o arquivo no
-# upload antes mesmo dessa conversao acontecer.
-UPLOAD_EXTRA_EXT = {".xlsx"}
+# Extensoes aceitas so no UPLOAD (nunca mandadas direto pra IA como base64) --
+# .xlsx e convertido pra .png por _converter_planilhas_para_imagem() antes de
+# find_documents() rodar; .docx (Word) e extraido como texto puro na hora de
+# montar os blocos (ver _docx_como_markdown/build_content_blocks) -- sem essa
+# lista, app.py descartaria esses arquivos no upload antes mesmo disso
+# acontecer. SharePoint ja baixa qualquer extensao sem filtro nenhum (ver
+# sharepoint_client.download_client_folder) -- quem decide o que de fato e
+# lido e find_documents(), abaixo.
+UPLOAD_EXTRA_EXT = {".xlsx", ".docx"}
+# .doc (formato binario antigo do Word) NAO e suportado -- so .docx (Open
+# XML); python-docx nao le .doc.
+WORD_EXT = {".docx"}
 
 MUNICIPIOS_SP_PATH = SCRIPT_DIR / "municipios_sp_tjsp.csv"
 
@@ -1038,9 +1045,10 @@ def _converter_planilhas_para_imagem(folder: Path):
 
 def find_documents(folder: Path):
     _converter_planilhas_para_imagem(folder)
+    extensoes_aceitas = SUPPORTED_EXT.keys() | WORD_EXT
     files = sorted(
         p for p in folder.rglob("*")
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXT and not _e_saida_anterior(p)
+        if p.is_file() and p.suffix.lower() in extensoes_aceitas and not _e_saida_anterior(p)
     )
     # Documentos de identidade, carteirinha, comprovantes de contato com a
     # operadora e comprovantes de gratuidade vao para o INICIO da lista, cada
@@ -1185,9 +1193,48 @@ def _pdf_como_markdown(path: Path):
         doc.close()
 
 
+def _docx_como_markdown(path: Path):
+    """Extrai o texto de um .docx (Word) -- paragrafos e tabelas -- como
+    texto simples. Ao contrario do PDF, nenhum Word e "scaneado": e sempre
+    texto digital, entao, diferente de _pdf_como_markdown, nao precisa de
+    nenhuma deteccao de confianca -- todo .docx vira texto, sempre (e nem
+    teria como mandar como imagem/documento: a API so aceita PDF nesses
+    tipos de bloco). Devolve None se o arquivo nao abrir ou nao tiver
+    nenhum texto (nunca lanca excecao)."""
+    if Pt is None:  # python-docx nao instalado (ver guarda no topo do arquivo)
+        return None
+    import docx as docx_lib
+
+    try:
+        documento = docx_lib.Document(str(path))
+    except Exception:
+        return None
+    partes = []
+    for paragrafo in documento.paragraphs:
+        texto = paragrafo.text.strip()
+        if texto:
+            partes.append(texto)
+    for tabela in documento.tables:
+        linhas = []
+        for linha in tabela.rows:
+            celulas = [c.text.strip() for c in linha.cells]
+            if any(celulas):
+                linhas.append(" | ".join(celulas))
+        if linhas:
+            partes.append("\n".join(linhas))
+    return "\n\n".join(partes) if partes else None
+
+
 def build_content_blocks(files):
     blocks = []
     for f in files:
+        if f.suffix.lower() in WORD_EXT:
+            texto = _docx_como_markdown(f)
+            blocks.append({
+                "type": "text",
+                "text": f"Arquivo: {f.name} (Word, convertido para texto)\n\n{texto or '[documento vazio ou ilegível]'}",
+            })
+            continue
         media_type = SUPPORTED_EXT[f.suffix.lower()]
         markdown = _pdf_como_markdown(f) if media_type == "application/pdf" else None
         if markdown is not None:

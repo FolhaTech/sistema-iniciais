@@ -125,12 +125,12 @@ UPLOAD_PAGE = """
   </form>
 </main>
 <script>
-const EXT_OK = ['.pdf', '.png', '.jpg', '.jpeg', '.xlsx'];
+const EXT_OK = ['.pdf', '.png', '.jpg', '.jpeg', '.xlsx', '.docx'];
 document.getElementById('pasta').addEventListener('change', function(e){
   const files = Array.from(e.target.files).filter(f => EXT_OK.some(ext => f.name.toLowerCase().endsWith(ext)));
   const div = document.getElementById('lista');
   if (files.length === 0){
-    div.innerHTML = '<em>Nenhum PDF/PNG/JPG/XLSX encontrado nessa pasta.</em>';
+    div.innerHTML = '<em>Nenhum PDF/PNG/JPG/XLSX/DOCX encontrado nessa pasta.</em>';
     return;
   }
   div.innerHTML = '<strong>' + files.length + ' documento(s) encontrado(s):</strong><br>' +
@@ -354,11 +354,11 @@ def processar():
                 saved_files.append(dest)
 
             if not saved_files:
-                return _erro_pagina("Nenhum PDF/PNG/JPG/XLSX encontrado nos arquivos enviados.")
+                return _erro_pagina("Nenhum PDF/PNG/JPG/XLSX/DOCX encontrado nos arquivos enviados.")
 
         files = pp.find_documents(session_dir)
         if not files:
-            return _erro_pagina("Nenhum PDF/PNG/JPG/XLSX encontrado na pasta do cliente.")
+            return _erro_pagina("Nenhum PDF/PNG/JPG/XLSX/DOCX encontrado na pasta do cliente.")
         batches = pp.make_batches(files)
 
         import anthropic

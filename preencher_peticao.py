@@ -1734,17 +1734,49 @@ def data_atual_extenso():
     return f"{hoje.day} de {MESES_PT[hoje.month - 1]} de {hoje.year}"
 
 
+_TITULO_PALAVRAS_MINUSCULAS = {
+    "de", "da", "do", "das", "dos", "e", "em", "para", "com", "por", "a", "o", "as", "os",
+}
+# Sigla societaria (sem pontuacao) que precisa ficar em caixa alta, nunca
+# titulo-caso ("Ltda" fica errado, tem que ser "LTDA") -- lista fechada, ao
+# contrario de qualquer palavra curta generica (ver _TITULO_TEM_PONTO_RE
+# abaixo pra "S.A."/"S/A", que sao pegas por outro criterio).
+_TITULO_SIGLAS_SEM_PONTO = {"ltda", "me", "epp", "eireli"}
+# "S.A." / "S/A" / "S.A" -- qualquer token com ponto ou barra vira caixa
+# alta inteira (preposicao de 1-2 letras nunca tem ponto/barra, entao nao ha
+# risco de pegar "de"/"a" por engano).
+_TITULO_TEM_PONTO_RE = re.compile(r"[./]")
+
+
 def _so_primeira_maiuscula(texto):
     """Os dados da operadora (nome, logradouro, bairro, cidade) costumam vir
     em CAIXA ALTA (copiados do cartao de CNPJ), mas no corpo da peticao
-    devem aparecer so com a primeira letra maiuscula -- diferente do nome
-    da Requerente, que fica em negrito E caixa alta, por padrao do
-    escritorio. Nao usar para UF (sigla de 2 letras, sempre maiuscula) nem
-    para CNPJ/numero/CEP/e-mail."""
+    devem aparecer em Título Caso (cada palavra com a inicial maiuscula,
+    preposicoes em minuscula, siglas tipo "S.A."/"LTDA" mantidas em caixa
+    alta) -- diferente do nome da Requerente, que fica em negrito E caixa
+    alta por padrao do escritorio. ANTES deixava so a 1a letra da string
+    INTEIRA maiuscula e o resto tudo minusculo (ex: "UNIMED SEGUROS SAUDE
+    S.A." virava "Unimed seguros saude s.a.", parecendo um nome truncado/
+    errado) -- bug real, nao questao de extracao da IA. Nao usar para UF
+    (sigla de 2 letras, sempre maiuscula) nem para CNPJ/numero/CEP/e-mail."""
     texto = (texto or "").strip()
     if not texto:
         return texto
-    return texto[0].upper() + texto[1:].lower()
+    palavras = texto.split(" ")
+    resultado = []
+    for i, palavra in enumerate(palavras):
+        if not palavra:
+            resultado.append(palavra)
+            continue
+        baixa = palavra.lower()
+        if _TITULO_TEM_PONTO_RE.search(palavra) or baixa.strip("-") in _TITULO_SIGLAS_SEM_PONTO:
+            resultado.append(palavra.upper())
+            continue
+        if i > 0 and baixa in _TITULO_PALAVRAS_MINUSCULAS:
+            resultado.append(baixa)
+        else:
+            resultado.append(baixa[0].upper() + baixa[1:])
+    return " ".join(resultado)
 
 
 def set_field_text(elem, text):
@@ -2383,48 +2415,18 @@ _DOCX_FN_SIZE_PT = 11
 _DOCX_CAPTION_SIZE_PT = 9
 
 
-def _docx_add_hyperlink(paragraph, url, text, size_pt=None):
-    """Hyperlink real (clicavel, azul, sublinhado) -- python-docx nao tem um
-    metodo pronto pra isso, e o jeito documentado e montar o XML (w:hyperlink
-    com relacionamento externo) na mao."""
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-    from docx.opc.constants import RELATIONSHIP_TYPE as RT
-
-    part = paragraph.part
-    r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
-    hyperlink = OxmlElement("w:hyperlink")
-    hyperlink.set(qn("r:id"), r_id)
-    run_elem = OxmlElement("w:r")
-    rpr = OxmlElement("w:rPr")
-    color = OxmlElement("w:color")
-    color.set(qn("w:val"), "2B5FA3")
-    rpr.append(color)
-    underline = OxmlElement("w:u")
-    underline.set(qn("w:val"), "single")
-    rpr.append(underline)
-    if size_pt:
-        sz = OxmlElement("w:sz")
-        sz.set(qn("w:val"), str(int(size_pt * 2)))
-        rpr.append(sz)
-    run_elem.append(rpr)
-    t = OxmlElement("w:t")
-    t.text = text
-    t.set(qn("xml:space"), "preserve")
-    run_elem.append(t)
-    hyperlink.append(run_elem)
-    paragraph._p.append(hyperlink)
-
-
-def _docx_add_runs(paragraph, node, bold=False, italic=False, underline=False, size_pt=None):
+def _docx_add_runs(paragraph, node, bold=False, italic=False, underline=False, size_pt=None, notas_ids=None):
     """Percorre recursivamente os filhos de `node` (uma Tag do BeautifulSoup)
     adicionando runs de texto no paragrafo docx, carregando negrito/italico/
     sublinhado herdados das tags ancestrais (strong/b, em/i, u). <sup
     class="note"> (dica interna da equipe) nunca aparece no documento final
-    -- mesmo tratamento do PDF. <sup><a href="#notaN"> (citacao) vira so o
-    numero, em sobrescrito. <br> e <cite> (dentro de blockquote) viram quebra
-    de linha dentro do MESMO paragrafo, nao um paragrafo novo -- mantem a
-    citação como um bloco visual so, igual ao HTML original."""
+    -- mesmo tratamento do PDF. <sup><a href="#notaN"> (citacao) vira uma
+    NOTA DE RODAPE DE VERDADE do Word (ver _docx_inserir_referencia_nota) --
+    o proprio Word recalcula em qual pagina ela cai a cada edicao, sem
+    nenhum calculo nosso (ao contrario do PDF). <br> e <cite> (dentro de
+    blockquote) viram quebra de linha dentro do MESMO paragrafo, nao um
+    paragrafo novo -- mantem a citação como um bloco visual so, igual ao
+    HTML original."""
     from docx.enum.text import WD_BREAK
 
     for child in node.children:
@@ -2449,9 +2451,17 @@ def _docx_add_runs(paragraph, node, bold=False, italic=False, underline=False, s
             continue
         if nome == "cite":
             paragraph.add_run().add_break(WD_BREAK.LINE)
-            _docx_add_runs(paragraph, child, bold, italic, underline, size_pt)
+            _docx_add_runs(paragraph, child, bold, italic, underline, size_pt, notas_ids)
             continue
         if nome == "sup":
+            link = child.find("a", href=_DOCX_HREF_NOTA_RE)
+            nota_id = notas_ids.get(link["href"].lstrip("#")) if (link is not None and notas_ids) else None
+            if nota_id is not None:
+                _docx_inserir_referencia_nota(paragraph, nota_id)
+                continue
+            # sem o mapeamento (endnotes ausente/editado) -- cai pro
+            # comportamento antigo, so o numero em sobrescrito, pra nao
+            # perder a citacao de vista.
             run = paragraph.add_run(child.get_text())
             run.bold, run.italic, run.underline = bold, italic, underline
             run.font.superscript = True
@@ -2465,7 +2475,7 @@ def _docx_add_runs(paragraph, node, bold=False, italic=False, underline=False, s
             ni = True
         if nome == "u":
             nu = True
-        _docx_add_runs(paragraph, child, nb, ni, nu, size_pt)
+        _docx_add_runs(paragraph, child, nb, ni, nu, size_pt, notas_ids)
 
 
 def _docx_insert_picture(doc, img_tag, largura_cropada, largura_full_page):
@@ -2550,12 +2560,15 @@ def _docx_insert_doc_photos_row(doc, row, largura_coluna):
 _DOCX_HREF_NOTA_RE = re.compile(r"^#nota\d+$")
 
 
-def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
+def _docx_render_block(doc, tag, largura_cropada, largura_full_page, notas_ids=None):
     """Renderiza um filho direto de <main> (ou de um wrapper transparente
-    como div.cond/div.endnotes/div[data-field-list]) como um ou mais
-    paragrafos/imagens/tabelas do docx. div.cond com a classe "hide" (secao
-    condicional desmarcada no painel) e omitido por inteiro -- a petição em
-    Word reflete exatamente o que o advogado deixou visivel na tela."""
+    como div.cond/div[data-field-list]) como um ou mais paragrafos/imagens/
+    tabelas do docx. div.cond com a classe "hide" (secao condicional
+    desmarcada no painel) e omitido por inteiro -- a petição em Word
+    reflete exatamente o que o advogado deixou visivel na tela. O bloco
+    div.endnotes NUNCA chega aqui -- render_docx ja extrai o conteudo dele
+    pras notas de rodape de verdade e remove a div da arvore antes de
+    chamar esta funcao."""
     if isinstance(tag, Comment):
         return
     if isinstance(tag, NavigableString):
@@ -2577,10 +2590,10 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
         if "doc-photos-row" in classes:
             _docx_insert_doc_photos_row(doc, tag, largura_cropada)
             return
-        # wrapper transparente (cond, endnotes, data-field-list, etc.) -- so
-        # repassa os filhos, sem criar paragrafo proprio pra div em si.
+        # wrapper transparente (cond, data-field-list, etc.) -- so repassa
+        # os filhos, sem criar paragrafo proprio pra div em si.
         for filho in tag.children:
-            _docx_render_block(doc, filho, largura_cropada, largura_full_page)
+            _docx_render_block(doc, filho, largura_cropada, largura_full_page, notas_ids)
         return
 
     if nome in ("h2", "h3", "h4"):
@@ -2590,47 +2603,14 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
         p.paragraph_format.space_after = Pt(0)
         if nome == "h2":
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _docx_add_runs(p, tag)
+        _docx_add_runs(p, tag, notas_ids=notas_ids)
         return
 
     if nome == "p":
-        if "fn" in classes:
-            # referencia (fim do documento) -- sem indentacao, fonte de
-            # citacao/lei (11pt, mesma categoria da blockquote no padrao do
-            # escritorio), e com hyperlink real no link (em vez de so o
-            # texto do <a>).
-            p = doc.add_paragraph()
-            p.paragraph_format.first_line_indent = 0
-            p.paragraph_format.space_after = Pt(0)
-            link = tag.find("a", href=True)
-            if link is not None:
-                antes = link.previous_sibling
-                # texto antes do link (ex: "1. Jornal da USP. ... Disponível em: ")
-                acumulado = ""
-                for sib in tag.children:
-                    if sib is link:
-                        break
-                    acumulado += sib.get_text() if isinstance(sib, Tag) else str(sib)
-                if acumulado:
-                    r = p.add_run(acumulado)
-                    r.font.size = Pt(_DOCX_FN_SIZE_PT)
-                _docx_add_hyperlink(p, link["href"], link.get_text(), size_pt=_DOCX_FN_SIZE_PT)
-                depois = link.next_sibling
-                if depois:
-                    cauda = "".join(
-                        s.get_text() if isinstance(s, Tag) else str(s)
-                        for s in list(tag.children)[list(tag.children).index(link) + 1:]
-                    )
-                    if cauda.strip():
-                        r2 = p.add_run(cauda)
-                        r2.font.size = Pt(_DOCX_FN_SIZE_PT)
-            else:
-                _docx_add_runs(p, tag, size_pt=_DOCX_FN_SIZE_PT)
-            return
         p = doc.add_paragraph()
         p.paragraph_format.first_line_indent = 0 if "noindent" in classes else Cm(4.75)
         p.paragraph_format.space_after = Pt(0)
-        _docx_add_runs(p, tag)
+        _docx_add_runs(p, tag, notas_ids=notas_ids)
         return
 
     if nome == "blockquote":
@@ -2638,7 +2618,7 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page):
         p.paragraph_format.left_indent = Cm(5)
         p.paragraph_format.first_line_indent = 0
         p.paragraph_format.space_after = Pt(0)
-        _docx_add_runs(p, tag, size_pt=_DOCX_QUOTE_SIZE_PT)
+        _docx_add_runs(p, tag, size_pt=_DOCX_QUOTE_SIZE_PT, notas_ids=notas_ids)
         return
 
     # tag solta nao mapeada (ex: tabela colada de outro lugar) -- melhor
@@ -2686,6 +2666,115 @@ def _docx_set_brand_image(story, img_tag, largura_pagina, margem_esq, margem_dir
     return int(largura_pagina * (tamanho[1] / tamanho[0]))
 
 
+# ---------------------------------------------------------------------------
+# Notas de rodape DE VERDADE no Word -- ao contrario do PDF (onde a posicao
+# de cada nota e calculada a mao, uma vez, na geracao -- ver
+# render_pdf_with_footnotes), o Word tem seu PROPRIO mecanismo de nota de
+# rodape (word/footnotes.xml, um <w:footnoteReference> no corpo apontando
+# pra ela) que recalcula sozinho, a cada edicao do advogado, em qual pagina
+# a nota cai. python-docx nao tem uma API pronta pra isso (so sabe editar
+# paragrafos/imagens/tabelas do corpo) -- a parte e montada aqui na mao, em
+# XML cru, seguindo o formato OOXML.
+# ---------------------------------------------------------------------------
+
+_DOCX_FOOTNOTES_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
+)
+_DOCX_FOOTNOTES_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
+)
+_DOCX_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_DOCX_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _docx_texto_antes_depois_do_link(p_tag, link):
+    """Devolve (texto_antes, texto_depois) do <a> dentro do paragrafo de
+    referencia -- mesma extracao usada tanto pro hyperlink dentro do corpo
+    (caminho antigo, mantido como reserva) quanto pra nota de rodape real."""
+    filhos = list(p_tag.children)
+    idx = filhos.index(link)
+    antes = "".join(s.get_text() if isinstance(s, Tag) else str(s) for s in filhos[:idx])
+    depois = "".join(s.get_text() if isinstance(s, Tag) else str(s) for s in filhos[idx + 1:])
+    return antes, depois
+
+
+def _docx_criar_parte_notas(document, notas):
+    """Monta word/footnotes.xml com uma <w:footnote> por item de `notas`
+    (lista de (id_int, p_tag), na ordem 1, 2, 3...) e relaciona a parte ao
+    documento principal -- depois disso, qualquer <w:footnoteReference
+    w:id="N"/> no corpo do texto vira uma nota de rodape de verdade."""
+    import xml.sax.saxutils as sax
+    from docx.opc.part import Part
+    from docx.opc.packuri import PackURI
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    part = Part(PackURI("/word/footnotes.xml"), _DOCX_FOOTNOTES_CONTENT_TYPE, b"", document.part.package)
+
+    tamanho_tw = int(_DOCX_FN_SIZE_PT * 2)  # w:sz e em "half-points"
+    fonte_attrs = f'w:ascii="{_DOCX_BODY_FONT}" w:hAnsi="{_DOCX_BODY_FONT}"'
+
+    def run_texto(texto):
+        texto = (texto or "")
+        if not texto:
+            return ""
+        return (
+            f'<w:r><w:rPr><w:rFonts {fonte_attrs}/><w:sz w:val="{tamanho_tw}"/></w:rPr>'
+            f'<w:t xml:space="preserve">{sax.escape(texto)}</w:t></w:r>'
+        )
+
+    partes_xml = [
+        f'<w:footnotes xmlns:w="{_DOCX_W_NS}" xmlns:r="{_DOCX_R_NS}">'
+        '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+        '<w:footnote w:type="continuationSeparator" w:id="0">'
+        '<w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>'
+    ]
+    for id_int, p_tag in notas:
+        link = p_tag.find("a", href=True)
+        if link is not None:
+            antes, depois = _docx_texto_antes_depois_do_link(p_tag, link)
+            r_id = part.relate_to(link["href"], RT.HYPERLINK, is_external=True)
+            corpo = (
+                run_texto(antes)
+                + f'<w:hyperlink r:id="{r_id}">'
+                + f'<w:r><w:rPr><w:rFonts {fonte_attrs}/><w:color w:val="2B5FA3"/>'
+                + f'<w:u w:val="single"/><w:sz w:val="{tamanho_tw}"/></w:rPr>'
+                + f'<w:t xml:space="preserve">{sax.escape(link.get_text())}</w:t></w:r></w:hyperlink>'
+                + run_texto(depois)
+            )
+        else:
+            corpo = run_texto(p_tag.get_text())
+        partes_xml.append(
+            f'<w:footnote w:id="{id_int}"><w:p>'
+            '<w:pPr><w:spacing w:before="0" w:after="0" w:line="276" w:lineRule="auto"/></w:pPr>'
+            f'<w:r><w:rPr><w:rFonts {fonte_attrs}/><w:sz w:val="{tamanho_tw}"/>'
+            '<w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>'
+            f'<w:r><w:rPr><w:rFonts {fonte_attrs}/><w:sz w:val="{tamanho_tw}"/></w:rPr>'
+            '<w:t xml:space="preserve"> </w:t></w:r>'
+            f'{corpo}</w:p></w:footnote>'
+        )
+    partes_xml.append("</w:footnotes>")
+    part._blob = "".join(partes_xml).encode("utf-8")
+
+    document.part.relate_to(part, _DOCX_FOOTNOTES_REL_TYPE)
+
+
+def _docx_inserir_referencia_nota(paragraph, footnote_id):
+    """Insere, no paragrafo docx, um <w:footnoteReference w:id="N"/> --
+    python-docx nao expoe isso na API de alto nivel (Run nao tem um metodo
+    pronto pra nota de rodape), entao o elemento e montado em XML cru e
+    anexado direto no <w:p> do paragrafo."""
+    from docx.oxml import parse_xml
+
+    tamanho_tw = int(_DOCX_FN_SIZE_PT * 2)
+    xml = (
+        f'<w:r xmlns:w="{_DOCX_W_NS}"><w:rPr><w:rFonts w:ascii="{_DOCX_BODY_FONT}" '
+        f'w:hAnsi="{_DOCX_BODY_FONT}"/><w:sz w:val="{tamanho_tw}"/>'
+        '<w:vertAlign w:val="superscript"/></w:rPr>'
+        f'<w:footnoteReference w:id="{footnote_id}"/></w:r>'
+    )
+    paragraph._p.append(parse_xml(xml))
+
+
 def render_docx(html_content: str) -> bytes:
     """Gera a petição em .docx a partir do MESMO HTML ja preenchido/editado
     na tela (igual o /gerar-pdf recebe) -- texto, imagens e timbrado viram
@@ -2710,10 +2799,39 @@ def render_docx(html_content: str) -> bytes:
     for nota_interna in main.find_all("sup", class_="note"):
         nota_interna.decompose()
 
+    # Referencias -- viram notas de rodape DE VERDADE do Word (ver bloco
+    # acima), nao mais paragrafos no fim do corpo: o Word entao recalcula
+    # sozinho em qual pagina cada uma cai, exatamente o que se pediu ("as
+    # referencias continuam no fim da ultima pagina, nao no rodape das
+    # paginas em que sao citadas" -- so acontecia porque o Word nao tinha
+    # nenhum motivo pra tratar aquele texto como nota de rodape de verdade).
+    notas_ids = {}
+    notas = []
+    endnotes = main.find("div", class_="endnotes")
+    if endnotes is not None:
+        # extract() (nao decompose()) em CADA <p> antes de tirar a div do
+        # ar -- decompose() destroi recursivamente todo o conteudo interno
+        # dos filhos tambem, entao decompor a div INTEIRA de uma vez
+        # apagaria o texto desses mesmos <p> que acabamos de guardar em
+        # `notas`, e cada nota de rodape sairia vazia (so o numero, sem
+        # texto nem link).
+        for p_tag in list(endnotes.find_all("p", class_="fn", id=True)):
+            m = re.search(r"\d+", p_tag["id"])
+            if not m:
+                continue
+            id_int = int(m.group())
+            p_tag.extract()
+            notas.append((id_int, p_tag))
+            notas_ids[f"nota{id_int}"] = id_int
+        endnotes.decompose()
+        notas.sort(key=lambda t: t[0])
+
     thead_img = soup.select_one("thead img")
     tfoot_img = soup.select_one("tfoot img")
 
     doc = Document()
+    if notas:
+        _docx_criar_parte_notas(doc, notas)
     estilo = doc.styles["Normal"]
     estilo.font.name = _DOCX_BODY_FONT
     estilo.font.size = Pt(_DOCX_BODY_SIZE_PT)
@@ -2753,7 +2871,7 @@ def render_docx(html_content: str) -> bytes:
     largura_coluna = int(largura_conteudo * 0.46)  # duas colunas + respiro entre elas
 
     for filho in main.children:
-        _docx_render_block(doc, filho, largura_cropada, largura_full_page)
+        _docx_render_block(doc, filho, largura_cropada, largura_full_page, notas_ids)
 
     buf = io.BytesIO()
     doc.save(buf)

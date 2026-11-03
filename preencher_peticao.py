@@ -1130,6 +1130,56 @@ def eh_lote_critico(batch):
     return bool(grupos & GRUPOS_CRITICOS_DUPLA_CONSULTA)
 
 
+# Numero de chamadas simultaneas pra API da Anthropic. Cada lote (e cada
+# segunda consulta de lote critico) e uma requisicao HTTP independente --
+# antes, rodadas uma atras da outra, o tempo total era a SOMA do tempo de
+# todas (uma pasta com 5-6 lotes, 2-3 deles criticos/com 2a consulta, facil
+# passava de 10 chamadas sequenciais). No Vercel (plano Hobby, maxDuration
+# 300s em vercel.json), isso estourava o tempo da funcao serverless com
+# "504 FUNCTION_INVOCATION_TIMEOUT" -- o processamento nem chegava a
+# terminar. Rodando em paralelo, o tempo total fica perto do tempo da
+# chamada MAIS LENTA do grupo, nao da soma. 4 e um meio-termo conservador
+# (rapido o bastante pra entrar no limite de 300s, sem martelar a API a
+# ponto de bater em rate limit -- o SDK ja tem retry embutido pra isso, ver
+# _criar_mensagem_com_retry).
+MAX_CHAMADAS_PARALELAS = 4
+
+
+def processar_lotes(client, model, batches):
+    """Roda call_batch (e a segunda consulta dos lotes criticos, ver
+    eh_lote_critico) em paralelo, ate MAX_CHAMADAS_PARALELAS por vez.
+    Devolve all_results EXATAMENTE na mesma ordem que o loop sequencial
+    antigo produzia (resposta do lote 1, depois 1b se critico, depois lote
+    2, 2b...) -- merge_results depende dessa ordem pra alguns campos (ver
+    FIRST_BATCH_PREFERRED_FIELDS, que usa all_results[0] como "resposta do
+    PRIMEIRO lote", sempre o lote de identidade/RG)."""
+    import concurrent.futures
+
+    tarefas = []  # (batch, label, numero_do_lote) -- numero_do_lote repete pro "Xb"
+    for i, batch in enumerate(batches, 1):
+        tarefas.append((batch, str(i), i))
+        if eh_lote_critico(batch):
+            tarefas.append((batch, f"{i}b", i))
+
+    resultados = [None] * len(tarefas)
+
+    def _rodar(idx, batch, label, numero_lote):
+        r = call_batch(client, model, batch, label)
+        r["_grupo_lote"] = numero_lote
+        return idx, r
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CHAMADAS_PARALELAS) as executor:
+        futures = [
+            executor.submit(_rodar, idx, batch, label, numero_lote)
+            for idx, (batch, label, numero_lote) in enumerate(tarefas)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            idx, r = future.result()
+            resultados[idx] = r
+
+    return resultados
+
+
 # ---------------------------------------------------------------------------
 # PDF -> markdown (economia de tokens): a API cobra um PDF mandado como
 # "document" por PAGINA, como se cada pagina fosse uma imagem -- caro para
@@ -1723,17 +1773,29 @@ def _call_operadora(client, model, files, label):
 
 def completar_dados_operadora(client, model, files, data):
     """Preenche in-place os campos da operadora que a passada principal deixou
-    vazios, consultando os lotes ate completar. Devolve o proprio `data`."""
+    vazios, consultando TODOS os lotes de uma vez (em paralelo, ver
+    MAX_CHAMADAS_PARALELAS) -- antes consultava lote por lote e parava assim
+    que completasse, o que economizava chamadas, mas em serie: numa pasta
+    com varios lotes, essa varredura sequencial podia sozinha empurrar o
+    processamento pra alem do limite de tempo da funcao serverless (ver
+    processar_lotes). So roda mesmo quando falta algo (ver
+    _operadora_precisa_mais_consulta), entao o custo extra de nao parar cedo
+    e raro na pratica. Devolve o proprio `data`."""
+    import concurrent.futures
+
     if not _operadora_precisa_mais_consulta(data):
         return data
     print("  -> Dados da operadora incompletos; consultando de novo só essa parte...")
-    for i, batch in enumerate(make_batches(files), 1):
-        achado = _call_operadora(client, model, batch, str(i))
-        for k in OPERADORA_CAMPOS:
-            if not _valor_valido(data.get(k)) and _valor_valido(achado.get(k)):
-                data[k] = achado[k].strip()
-        if not _operadora_precisa_mais_consulta(data):
-            break
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CHAMADAS_PARALELAS) as executor:
+        futures = [
+            executor.submit(_call_operadora, client, model, batch, str(i))
+            for i, batch in enumerate(make_batches(files), 1)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            achado = future.result()
+            for k in OPERADORA_CAMPOS:
+                if not _valor_valido(data.get(k)) and _valor_valido(achado.get(k)):
+                    data[k] = achado[k].strip()
     return data
 
 
@@ -3212,15 +3274,7 @@ def main():
         sys.exit(1)
 
     print()
-    all_results = []
-    for i, batch in enumerate(batches, 1):
-        r = call_batch(client, args.model, batch, str(i))
-        r["_grupo_lote"] = i
-        all_results.append(r)
-        if eh_lote_critico(batch):
-            r2 = call_batch(client, args.model, batch, f"{i}b")
-            r2["_grupo_lote"] = i
-            all_results.append(r2)
+    all_results = processar_lotes(client, args.model, batches)
 
     data, conflicts = merge_results(all_results)
     completar_dados_operadora(client, args.model, files, data)

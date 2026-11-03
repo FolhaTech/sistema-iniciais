@@ -364,15 +364,7 @@ def processar():
         import anthropic
         client = anthropic.Anthropic()
 
-        all_results = []
-        for i, batch in enumerate(batches, 1):
-            r = pp.call_batch(client, model, batch, str(i))
-            r["_grupo_lote"] = i
-            all_results.append(r)
-            if pp.eh_lote_critico(batch):
-                r2 = pp.call_batch(client, model, batch, f"{i}b")
-                r2["_grupo_lote"] = i
-                all_results.append(r2)
+        all_results = pp.processar_lotes(client, model, batches)
 
         data, _ = pp.merge_results(all_results)
         pp.completar_dados_operadora(client, model, files, data)

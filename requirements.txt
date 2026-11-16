@@ -12,3 +12,4 @@ Pillow
 openpyxl
 python-docx
 gunicorn
+httpx

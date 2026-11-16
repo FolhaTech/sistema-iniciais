@@ -241,7 +241,10 @@ def login_required(view):
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("autenticado"):
-            return redirect(url_for("login", next=request.path))
+            # So volta pra rota original se for GET: rotas como /processar so
+            # aceitam POST, e um redirect pos-login e sempre GET (dava 405).
+            proxima = request.path if request.method == "GET" else None
+            return redirect(url_for("login", next=proxima))
         return view(*args, **kwargs)
     return wrapped
 
@@ -277,6 +280,8 @@ def logout():
 
 
 def api_key_error():
+    if pp.provider() != "anthropic":
+        return None
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         return (
             "A variável ANTHROPIC_API_KEY não está configurada nesta máquina. "
@@ -361,8 +366,7 @@ def processar():
             return _erro_pagina("Nenhum PDF/PNG/JPG/XLSX/DOCX encontrado na pasta do cliente.")
         batches = pp.make_batches(files)
 
-        import anthropic
-        client = anthropic.Anthropic()
+        client = pp.make_client()
 
         all_results = pp.processar_lotes(client, model, batches)
 

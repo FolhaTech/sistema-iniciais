@@ -37,6 +37,9 @@ import unicodedata
 import urllib.request
 from pathlib import Path
 
+import gemini_client
+import leitor_documentos as leitor
+
 # O console do Windows (cp1252) nao tem varios caracteres usados nas mensagens
 # (ex: ⚠) e derruba o script com UnicodeEncodeError bem no final, depois de já
 # ter gerado o HTML -- forcar UTF-8 evita esse crash e exibe os acentos certo.
@@ -93,6 +96,30 @@ _load_dotenv()
 # ANTHROPIC_BASE_URL estiver setado no .env, o SDK da anthropic ja usa esse
 # endereco automaticamente -- nao precisa de nenhum outro ajuste aqui.
 DEFAULT_MODEL = os.environ.get("OMNIROUTE_MODEL") or "claude-haiku-4-5"
+
+def provider():
+    """Quem le os documentos, na ordem de prioridade: "gemini" (GEMINI_API_KEY),
+    "leitor" (LEITOR_API_URL + LEITOR_API_KEY) ou "anthropic" (padrao).
+    Pra trocar de provedor, comente/descomente as linhas no .env."""
+    if gemini_client.configurado():
+        return "gemini"
+    if leitor.configurado():
+        return "leitor"
+    return "anthropic"
+
+
+def make_client():
+    """Cliente a passar para processar_lotes/completar_dados_operadora: o
+    adaptador do Gemini, None (o leitor nao usa cliente) ou o SDK da Anthropic."""
+    p = provider()
+    if p == "gemini":
+        return gemini_client.GeminiClient()
+    if p == "leitor":
+        return None
+    import anthropic
+
+    return anthropic.Anthropic()
+
 
 MAX_BATCH_BYTES_B64 = 12 * 1024 * 1024  # ~12MB base64 por lote (margem sob o limite de 32MB da API)
 MAX_FILES_PER_BATCH = 8
@@ -311,6 +338,7 @@ SCHEMA_PROPERTIES = {
     "operadora_cep": _nullable_string(),
     "operadora_email": _nullable_string(),
     "carteirinha_numero": _nullable_string(),
+    "plano_nome_autogestao": _nullable_string(),
     "peso_perdido_kg": _nullable_string(),
     "comorbidades_fisicas_1": _nullable_string(),
     "comorbidades_fisicas_2": _nullable_string(),
@@ -468,6 +496,18 @@ de um documento com esse número no mesmo lote (ex: cartão do plano e verso da 
 confira se todos concordam antes de responder; se não concordarem, reporte o mais completo e \
 explique em observacoes_divergencias. Não confunda com outros números que também aparecem perto \
 da carteirinha (código ANS da operadora, CNS, datas de vigência/nascimento).
+
+NOME DO PLANO (plano_nome_autogestao) — entra na frase "a Requerente é segurada do plano de \
+autogestão [NOME]". Copie o nome do plano/produto exatamente como aparece IMPRESSO na carteirinha \
+(ex: o título do cartão, "Plano ..." ou a marca da operadora de autogestão, como \
+"CABESP", "Postal Saúde", "GEAP"), sem CNPJ, sem razão social completa e sem a palavra \
+"autogestão" repetida. Se a carteirinha não trouxer um nome de plano, use o nome fantasia/sigla \
+da operadora que aparece nela ou nos e-mails/cartas dela. Se nenhum documento trouxer, deixe "".
+
+GÊNERO — SEMPRE FEMININO: em todo texto que você redigir (comorbidades, parágrafos, fatos, danos \
+morais etc.), a cliente é SEMPRE "a Requerente" (nunca "o Requerente", "do Requerente", "ao \
+Requerente" etc.), mesmo que o nome ou os documentos sugiram outro gênero. Use um único termo, \
+no feminino, do começo ao fim.
 
 ENDEREÇO DA CLIENTE (cliente_endereco_logradouro, cliente_endereco_numero, \
 cliente_endereco_complemento, cliente_bairro, cliente_cidade, cliente_uf, cliente_cep) — a \
@@ -1275,6 +1315,44 @@ def _docx_como_markdown(path: Path):
     return "\n\n".join(partes) if partes else None
 
 
+# Gateways que nao sao a Anthropic (ex: OpenRouter) cobram/recusam blocos
+# "document" (PDF nativo): o OpenRouter devolve 402 "requires at least $0.50
+# in balance for files" mesmo em modelo :free. Nesses casos, o PDF que cairia
+# em visao e renderizado pagina a pagina como imagem (blocos "image", aceitos
+# sem saldo). Na API da Anthropic direta nada muda: o PDF segue como "document".
+PDF_VISAO_PAGINAS_MAX = 20
+PDF_VISAO_DPI = 110
+PDF_VISAO_JPEG_QUALIDADE = 75
+
+
+def _gateway_nao_anthropic():
+    base = (os.environ.get("ANTHROPIC_BASE_URL") or "").strip().lower()
+    return bool(base) and "api.anthropic.com" not in base
+
+
+def _pdf_paginas_como_jpeg_b64(path: Path):
+    """Renderiza as paginas do PDF em JPEG (base64). None se nao abrir."""
+    import pymupdf
+
+    try:
+        doc = pymupdf.open(str(path))
+    except Exception:
+        return None
+    try:
+        paginas = []
+        for i, pagina in enumerate(doc):
+            if i >= PDF_VISAO_PAGINAS_MAX:
+                break
+            pix = pagina.get_pixmap(dpi=PDF_VISAO_DPI)
+            jpeg = pix.tobytes("jpeg", jpg_quality=PDF_VISAO_JPEG_QUALIDADE)
+            paginas.append(base64.standard_b64encode(jpeg).decode("ascii"))
+        return paginas or None
+    except Exception:
+        return None
+    finally:
+        doc.close()
+
+
 def build_content_blocks(files):
     blocks = []
     for f in files:
@@ -1293,6 +1371,19 @@ def build_content_blocks(files):
                 "text": f"Arquivo: {f.name} (PDF com texto digital, convertido para markdown)\n\n{markdown}",
             })
             continue
+        if media_type == "application/pdf" and _gateway_nao_anthropic():
+            paginas_b64 = _pdf_paginas_como_jpeg_b64(f)
+            if paginas_b64:
+                blocks.append({
+                    "type": "text",
+                    "text": f"Arquivo: {f.name} (PDF escaneado, {len(paginas_b64)} página(s) enviadas como imagem)",
+                })
+                for pagina_b64 in paginas_b64:
+                    blocks.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": pagina_b64},
+                    })
+                continue
         data = base64.standard_b64encode(f.read_bytes()).decode("ascii")
         block_type = "document" if media_type == "application/pdf" else "image"
         blocks.append({"type": "text", "text": f"Arquivo: {f.name}"})
@@ -1376,7 +1467,111 @@ def _criar_mensagem_com_retry(client, **kwargs):
             time.sleep(ESPERA_ERRO_TRANSITORIO_S)
 
 
+# ---------------------------------------------------------------------------
+# Leitor de documentos (API /ler, ver leitor_documentos.py): alternativa a
+# Anthropic, ativa quando LEITOR_API_URL e LEITOR_API_KEY estao no .env. Ele
+# recebe UM arquivo (PDF/imagem) + uma pergunta e devolve texto -- entao cada
+# arquivo do lote vira uma chamada, com o SYSTEM_PROMPT + o SCHEMA dentro da
+# pergunta pedindo JSON, e os JSONs dos arquivos do lote sao unidos como o
+# _merge_pair ja faz com metades de lote. Perde-se a visao conjunta dos
+# arquivos de um mesmo lote (ex: cronologia dos fatos entre e-mails): a
+# cronologia sai da UNIAO dos fatos achados em cada arquivo.
+# ---------------------------------------------------------------------------
+
+def _texto_como_pdf_bytes(texto):
+    """Texto puro (ex: de um .docx) -> PDF simples, ja que o leitor so aceita
+    PDF/imagem."""
+    import textwrap
+    import pymupdf
+
+    troca = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'", "–": "-", "—": "-", "…": "...", " ": " "})
+    linhas = []
+    for par in texto.translate(troca).splitlines():
+        linhas.extend(textwrap.wrap(par, 95) or [""])
+    doc = pymupdf.open()
+    try:
+        for i in range(0, max(len(linhas), 1), 60):
+            pagina = doc.new_page()
+            bloco = "\n".join(linhas[i:i + 60]).encode("latin-1", "replace").decode("latin-1")
+            pagina.insert_text((50, 60), bloco, fontsize=10, fontname="helv")
+        return doc.tobytes()
+    finally:
+        doc.close()
+
+
+def _pergunta_extracao_arquivo(nome):
+    return (
+        SYSTEM_PROMPT
+        + "\n\n---\nResponda APENAS com um objeto JSON válido (sem markdown, sem texto fora do JSON) "
+        + "que siga exatamente este JSON Schema:\n"
+        + json.dumps(SCHEMA, ensure_ascii=False)
+        + f"\n\nDocumento a analisar: {nome}. Extraia os campos pedidos com base SOMENTE neste documento "
+        + "(campo que não aparece nele fica vazio)."
+    )
+
+
+def _merge_arquivos_leitor(a, b):
+    """_merge_pair, mas com os booleanos como OU (basta UM arquivo mencionar)."""
+    out = _merge_pair(a, b)
+    for k in BOOLEAN_FIELDS:
+        if a.get(k) is True or b.get(k) is True:
+            out[k] = True
+    return out
+
+
+def _ler_arquivo_json(f, pergunta, rotulo):
+    """Manda `f` pro leitor com `pergunta` e devolve o JSON da resposta, ou {}
+    (com aviso) se o arquivo nao for lido/entendido. Servico fora do ar e chave
+    errada SOBEM como excecao -- afetariam todos os arquivos, e uma peticao
+    vazia sem aviso na tela seria pior que um erro claro."""
+    try:
+        if f.suffix.lower() in WORD_EXT:
+            conteudo = _texto_como_pdf_bytes(_docx_como_markdown(f) or "")
+            nome = f.stem + ".pdf"
+        else:
+            conteudo, nome = f.read_bytes(), f.name
+        res = leitor.ler_documento_completo(
+            conteudo,
+            pergunta,
+            nome=nome,
+            on_status=lambda s: print(f"     [leitor] {f.name}: {s}"),
+        )
+    except (leitor.LeitorAuthError, leitor.LeitorIndisponivelError):
+        raise
+    except leitor.LeitorError as e:
+        print(f"     [aviso] {rotulo}: {f.name} não foi lido ({e})")
+        return {}
+    if res.get("truncado"):
+        print(
+            f"     [aviso] {f.name}: lido só em parte (páginas {res.get('paginas_lidas')}/{res.get('paginas_total')}, "
+            f"limite do leitor) — confira os dados deste documento."
+        )
+    texto = res.get("resposta") or ""
+    try:
+        dados = json.loads(texto)
+    except json.JSONDecodeError:
+        try:
+            dados = extract_json_loose(texto)
+        except ValueError:
+            preview = texto.strip().replace("\n", " ")[:150]
+            print(f"     [ERRO] leitor não devolveu JSON para {f.name}. Resposta recebida: {preview!r}")
+            return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def _call_batch_leitor(files, label):
+    print(f"  -> Lote {label} (leitor de documentos): {', '.join(f.name for f in files)}")
+    resultado = {}
+    for f in files:
+        achado = _ler_arquivo_json(f, _pergunta_extracao_arquivo(f.name), f"lote {label}")
+        resultado = _merge_arquivos_leitor(resultado, achado) if resultado else achado
+    return resultado
+
+
 def call_batch(client, model, files, label):
+    if provider() == "leitor":
+        return _call_batch_leitor(files, label)
+
     import anthropic
 
     print(f"  -> Lote {label}: {', '.join(f.name for f in files)}")
@@ -1516,6 +1711,7 @@ ANCHORED_FIELD_GROUPS = [
     ("carteirinha_numero", {
         "carteirinha_frente_arquivo", "carteirinha_frente_pagina",
         "carteirinha_verso_arquivo", "carteirinha_verso_pagina",
+        "plano_nome_autogestao",
     }),
     # renda/percentual/saldo so fazem sentido calculados a partir da planilha
     # de despesas de verdade -- ancora no mesmo lote que viu essa planilha,
@@ -1753,7 +1949,26 @@ def _operadora_precisa_mais_consulta(data):
     return operadora_incompleta(data) or not _valor_valido(data.get("operadora_email"))
 
 
+def _call_operadora_leitor(files, label):
+    print(f"  -> Consulta da operadora (leitor), lote {label}: {', '.join(f.name for f in files)}")
+    pergunta = (
+        OPERADORA_SYSTEM_PROMPT
+        + "\n\nResponda APENAS com um objeto JSON válido, sem markdown, que siga este JSON Schema:\n"
+        + json.dumps(OPERADORA_SCHEMA, ensure_ascii=False)
+        + "\n\nBase-se SOMENTE no documento analisado."
+    )
+    resultado = {}
+    for f in files:
+        achado = _ler_arquivo_json(f, pergunta, f"operadora, lote {label}")
+        for k in OPERADORA_CAMPOS:
+            if not _valor_valido(resultado.get(k)) and _valor_valido(achado.get(k)):
+                resultado[k] = str(achado[k]).strip()
+    return resultado
+
+
 def _call_operadora(client, model, files, label):
+    if provider() == "leitor":
+        return _call_operadora_leitor(files, label)
     print(f"  -> Consulta da operadora, lote {label}: {', '.join(f.name for f in files)}")
     content = build_content_blocks(files)
     try:
@@ -3003,6 +3218,7 @@ _BLANK_HINTS = {
     "gratuidade_percentual_comprometido": "[% comprometido — ver planilha de despesas]",
     "gratuidade_saldo_residual": "[saldo residual — ver planilha de despesas]",
     "cliente_idade": "[idade — ver RG/CNH/certidão de nascimento]",
+    "nome_plano_autogestao": "[nome do plano — ver carteirinha]",
 }
 _BLANK_HINT_PADRAO = "[dado não encontrado nos documentos — preencher manualmente]"
 
@@ -3084,7 +3300,41 @@ documento por item) -- aqui vira prosa corrida em portugues, ex: \
     return ", ".join(itens[:-1]) + " e " + itens[-1]
 
 
+# O modelo da peticao e todo no feminino ("A Requerente", "brasileira"), mas o
+# texto que a IA redige as vezes sai "o Requerente"/"do Requerente" (cliente
+# com nome ou documento que sugere outro genero). A peticao tem que usar UM
+# termo so, do comeco ao fim: aqui tudo vira feminino. Pra mudar o termo unico
+# no futuro, e so trocar este mapa (e o "Requerente" no modelo HTML).
+_REQUERENTE_ARTIGO_FEMININO = {"o": "a", "do": "da", "ao": "à", "pelo": "pela", "no": "na", "num": "numa"}
+_REQUERENTE_MASCULINO_RE = re.compile(
+    r"\b(" + "|".join(_REQUERENTE_ARTIGO_FEMININO) + r")(\s+)(Requerente)\b", re.IGNORECASE
+)
+
+
+def _requerente_para_feminino(texto):
+    def troca(m):
+        artigo = m.group(1)
+        novo = _REQUERENTE_ARTIGO_FEMININO[artigo.lower()]
+        if artigo[0].isupper():
+            novo = novo[0].upper() + novo[1:]
+        return f"{novo}{m.group(2)}{m.group(3)}"
+
+    return _REQUERENTE_MASCULINO_RE.sub(troca, texto)
+
+
+def _normalizar_requerente(valor):
+    """Aplica _requerente_para_feminino em todo texto de `valor` (str, lista ou dict)."""
+    if isinstance(valor, str):
+        return _requerente_para_feminino(valor)
+    if isinstance(valor, list):
+        return [_normalizar_requerente(v) for v in valor]
+    if isinstance(valor, dict):
+        return {k: _normalizar_requerente(v) for k, v in valor.items()}
+    return valor
+
+
 def fill_template(template_path: Path, output_path: Path, data: dict, files=None):
+    data = _normalizar_requerente(data)
     with open(template_path, "r", encoding="utf-8") as f:
         soup = BeautifulSoup(f.read(), "html.parser")
 
@@ -3102,6 +3352,7 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
         "requerida_cep": data.get("operadora_cep"),
         "requerida_email": data.get("operadora_email"),
         "carteirinha_numero": data.get("carteirinha_numero"),
+        "nome_plano_autogestao": data.get("plano_nome_autogestao"),
         "peso_perdido": data.get("peso_perdido_kg"),
         "comorbidades_1": data.get("comorbidades_fisicas_1"),
         "comorbidades_2": data.get("comorbidades_fisicas_2"),
@@ -3266,12 +3517,13 @@ def main():
         print("\n(--dry-run: nenhuma chamada de API foi feita)")
         return
 
-    import anthropic
     try:
-        client = anthropic.Anthropic()
+        client = make_client()
     except Exception as e:
         print(f"Erro ao criar cliente da API: {e}")
         sys.exit(1)
+    if provider() != "anthropic":
+        print(f"\nProvedor de leitura: {provider()} (no lugar da Anthropic).")
 
     print()
     all_results = processar_lotes(client, args.model, batches)

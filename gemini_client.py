@@ -134,25 +134,39 @@ class GeminiClient:
             corpo["generationConfig"]["responseMimeType"] = "application/json"
             corpo["generationConfig"]["responseJsonSchema"] = schema
 
-        while True:
-            with self._trava:
-                indice = self._indice
-            if indice >= len(self._modelos):
-                import anthropic
+        import anthropic
 
-                raise anthropic.NotFoundError(
-                    f"Nenhum modelo Gemini disponível ({', '.join(self._modelos)}). "
-                    "Defina GEMINI_MODEL no .env com um ID válido para a sua chave.",
-                    response=httpx.Response(404, request=httpx.Request("POST", BASE_URL)),
-                    body=None,
-                )
+        # Percorre os modelos a partir do primeiro ainda valido. Modelo que NAO
+        # EXISTE / esta sem cota e descartado de vez (_indice avanca); modelo
+        # apenas SOBRECARREGADO (503 "high demand", 429) so e pulado nesta
+        # chamada -- na proxima o principal volta a ser tentado primeiro. So
+        # levanta erro quando TODOS falharam, e o ultimo erro de sobrecarga e o
+        # que sobe (o call_batch ainda tem o seu proprio retry em cima).
+        ultimo_erro = None
+        with self._trava:
+            primeiro = self._indice
+        for indice in range(primeiro, len(self._modelos)):
+            modelo = self._modelos[indice]
             try:
-                return self._chamar(self._modelos[indice], corpo)
+                return self._chamar(modelo, corpo)
             except _ModeloIndisponivel as e:
-                print(f"     [aviso] modelo Gemini {self._modelos[indice]} indisponível ({e}); tentando o próximo.")
+                print(f"     [aviso] modelo Gemini {modelo} indisponível ({e}); tentando o próximo.")
                 with self._trava:
                     if self._indice == indice:
                         self._indice = indice + 1
+            except (anthropic.InternalServerError, anthropic.RateLimitError, anthropic.APIConnectionError) as e:
+                # APIConnectionError inclui APITimeoutError (modelo travado)
+                ultimo_erro = e
+                if indice + 1 < len(self._modelos):
+                    print(f"     [aviso] modelo Gemini {modelo} sobrecarregado/sem resposta; tentando {self._modelos[indice + 1]}.")
+        if ultimo_erro is not None:
+            raise ultimo_erro
+        raise anthropic.NotFoundError(
+            f"Nenhum modelo Gemini disponível ({', '.join(self._modelos)}). "
+            "Defina GEMINI_MODEL no .env com um ID válido para a sua chave.",
+            response=httpx.Response(404, request=httpx.Request("POST", BASE_URL)),
+            body=None,
+        )
 
     # -- uma chamada HTTP (com retry de 429/5xx) -----------------------------
     def _chamar(self, modelo, corpo):
@@ -163,7 +177,10 @@ class GeminiClient:
         for tentativa in range(1, 4):
             try:
                 with self._sem:
-                    with httpx.Client(timeout=httpx.Timeout(connect=20.0, read=300.0, write=300.0, pool=60.0)) as http:
+                    # read=150s: ler um PDF escaneado leva ~30s; passar disso e
+                    # modelo travado -- melhor cair pro proximo (ver _gerar) que
+                    # esperar 5 min numa tentativa so.
+                    with httpx.Client(timeout=httpx.Timeout(connect=20.0, read=150.0, write=300.0, pool=60.0)) as http:
                         resp = http.post(url, headers={"x-goog-api-key": _chave()}, json=corpo)
             except httpx.TimeoutException as e:
                 raise anthropic.APITimeoutError(request=requisicao) from e
@@ -185,7 +202,10 @@ class GeminiClient:
                     continue
                 raise anthropic.RateLimitError(f"Gemini 429: {msg}", response=resp, body=None)
             if resp.status_code >= 500:
-                if tentativa < 3:
+                # 2 tentativas por modelo: se ele continua sobrecarregado, e
+                # mais rapido cair pro proximo modelo (ver _gerar) do que ficar
+                # esperando este.
+                if tentativa < 2:
                     time.sleep(5 * tentativa)
                     continue
                 raise anthropic.InternalServerError(f"Gemini {resp.status_code}: {msg}", response=resp, body=None)

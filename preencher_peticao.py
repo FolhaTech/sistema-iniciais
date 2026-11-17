@@ -621,10 +621,25 @@ Antes de responder, releia os três textos: se uma mesma região ou sintoma apar
 deles, mantenha somente no campo mais adequado e remova dos outros. Os três campos são \
 parágrafos separados na petição, por isso cada um deve acrescentar informação nova.
 
-- danos_psicologicos_paragrafo (diagnóstico psicológico formal com CID, se houver, do laudo \
-psicológico): "a Requerente [...] apresenta problemas psicológicos, como isolamento social, \
-vergonha em demasia, insegurança, baixa autoestima [...], podendo ser classificado como \
-Transtorno Depressivo (CID-10 F32) e Transtorno de Ansiedade (CID-10 F41.1)."
+- danos_psicologicos_paragrafo: este campo substitui o parágrafo INTEIRO da petição sobre os \
+danos psicológicos, então devolva SEMPRE o parágrafo completo neste modelo exato, trocando só \
+[SINTOMAS]: "A Requerente superou a sua obesidade, e agora, a deformidade resultante acima \
+diagnosticada, causa a ela, além dos problemas de pele acima transcritos, problemas \
+psicológicos, como [SINTOMAS]. Resumidamente, a Requerente necessita ser tratada \
+cirurgicamente para correção de sua grave deformidade." [SINTOMAS] = os sintomas/queixas \
+emocionais que o laudo psicológico descreve (ex: insegurança, vergonha, constrangimento, baixa \
+autoestima, ansiedade e sintomas de humor depressivo), em minúsculas, separados por vírgula e \
+com "e" antes do último; cite só o que o laudo diz, sem códigos CID e sem copiar o laudo \
+inteiro. Priorize o sofrimento emocional ligado à imagem corporal e à deformidade (insegurança, \
+vergonha, constrangimento, isolamento, baixa autoestima, ansiedade, humor depressivo); NÃO inclua \
+traços de atenção/comportamento (impulsividade, procrastinação, dificuldade de atenção, \
+hiperatividade) nem diagnósticos sem relação com a deformidade. Normalmente 4 a 6 itens. \
+Não mude a abertura nem o fecho do modelo. Se não houver laudo psicológico, deixe "".
+
+- psicologa_nome_crp (psicóloga que assina o laudo/relatório psicológico — fonte: SOMENTE esse \
+laudo): escreva "Dra. NOME COMPLETO – CRP 06/NNNNNN", ou seja: "Dra." + o nome como está no \
+documento + travessão + "CRP" + o número exatamente como impresso (com a barra, ex: 06/123456), \
+sem "nº" nem dois-pontos. Se o laudo não trouxer nome ou CRP com clareza, deixe "".
 
 - danos_morais_laudo_1 (o que o laudo psicológico documenta sobre o impacto emocional da negativa/interrupção do tratamento, para a seção de danos morais): 1-2 frases citando achados concretos do laudo (ex: quadro depressivo reativo, fobia social, ansiedade).
 
@@ -1206,6 +1221,7 @@ def processar_lotes(client, model, batches):
     def _rodar(idx, batch, label, numero_lote):
         r = call_batch(client, model, batch, label)
         r["_grupo_lote"] = numero_lote
+        r["_arquivos"] = [f.name for f in batch]  # ver merge_results (_arquivos_nao_lidos)
         return idx, r
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CHAMADAS_PARALELAS) as executor:
@@ -1568,6 +1584,14 @@ def _call_batch_leitor(files, label):
     return resultado
 
 
+def _lote_falhou(files):
+    """Resultado de um lote que NAO foi lido (API fora do ar/sobrecarregada,
+    arquivo recusado...): vazio de dados, mas com a lista dos arquivos, pra a
+    peticao poder avisar na tela (ver merge_results e fill_template) em vez de
+    so mostrar "dado nao encontrado" como se o documento nao tivesse a info."""
+    return {"_arquivos_nao_lidos": [f.name for f in files]}
+
+
 def call_batch(client, model, files, label):
     if provider() == "leitor":
         return _call_batch_leitor(files, label)
@@ -1602,7 +1626,7 @@ def call_batch(client, model, files, label):
                 except ValueError:
                     preview = text.strip().replace("\n", " ")[:150]
                     print(f"     [ERRO] modelo não devolveu JSON em nenhuma tentativa para este lote. Resposta recebida: {preview!r}")
-                    return {}
+                    return _lote_falhou(files)
     except anthropic.BadRequestError as e:
         msg = str(e)
         if "output_config" in msg or "json_schema" in msg:
@@ -1611,15 +1635,17 @@ def call_batch(client, model, files, label):
                 return _call_plain_json(client, model, content)
             except _erros_transitorios_api() as e2:
                 print(f"     [ERRO] falha temporária da API neste lote ({type(e2).__name__}).")
-                return {}
+                return _lote_falhou(files)
         if len(files) > 1:
             print(f"     [aviso] lote rejeitado ({msg[:120]}...). Dividindo em lotes menores.")
             mid = len(files) // 2
             r1 = call_batch(client, model, files[:mid], label + "a")
             r2 = call_batch(client, model, files[mid:], label + "b")
-            return _merge_pair(r1, r2)
+            unidos = _merge_pair(r1, r2)
+            unidos["_arquivos_nao_lidos"] = (r1.get("_arquivos_nao_lidos") or []) + (r2.get("_arquivos_nao_lidos") or [])
+            return unidos
         print(f"     [ERRO] não foi possível processar sozinho o arquivo {files[0].name}: {msg[:200]}")
-        return {}
+        return _lote_falhou(files)
     except _erros_transitorios_api() as e:
         print(
             f"     [ERRO] falha temporária da API da Anthropic mesmo após "
@@ -1628,7 +1654,7 @@ def call_batch(client, model, files, label):
             f"ficarão sem dados extraídos — revise manualmente os campos "
             f"relacionados a: {', '.join(f.name for f in files)}."
         )
-        return {}
+        return _lote_falhou(files)
 
 
 # Campos de lista onde "a" e "b" cobrem DOCUMENTOS DIFERENTES (ver
@@ -1824,6 +1850,14 @@ def merge_results(all_results):
             conflicts[key] = uniq
     merged["fatos_lista"] = _ordenar_fatos(merged.get("fatos_lista"))
     _drop_duplicate_urgencia_photo(merged)
+    # Arquivos que NENHUMA consulta conseguiu ler (API sobrecarregada etc.).
+    # Um lote critico e consultado 2x: se a 2a leu o arquivo, ele conta como lido.
+    perdidos, cobertos = set(), set()
+    for r in all_results:
+        falhos = set(r.get("_arquivos_nao_lidos") or [])
+        perdidos |= falhos
+        cobertos |= set(r.get("_arquivos") or []) - falhos
+    merged["_arquivos_nao_lidos"] = sorted(perdidos - cobertos)
     return merged, conflicts
 
 
@@ -3386,10 +3420,37 @@ def _normalizar_requerente(valor):
     return valor
 
 
+def _inserir_aviso_leitura(soup, nomes):
+    """Faixa de aviso no painel de edicao (nao sai impressa, nem no PDF/Word)
+    listando os arquivos que a IA nao conseguiu ler -- sem isso, os campos
+    desses documentos aparecem como "dado nao encontrado" e parece que a
+    informacao nao existe neles."""
+    toolbar = soup.find("div", class_="toolbar")
+    if toolbar is None:
+        return
+    aviso = soup.new_tag("div")
+    aviso["style"] = (
+        "background:#fff3cd;color:#7a4b00;border:1px solid #e0b252;border-radius:4px;"
+        "padding:8px 12px;margin:8px 0;font-size:13px;"
+    )
+    aviso.string = (
+        "⚠ Não foi possível ler estes arquivos (serviço de IA indisponível ou sobrecarregado): "
+        + "; ".join(nomes)
+        + ". Os campos que dependem deles ficaram em branco — gere a petição novamente."
+    )
+    h1 = toolbar.find("h1")
+    if h1 is not None:
+        h1.insert_after(aviso)
+    else:
+        toolbar.insert(0, aviso)
+
+
 def fill_template(template_path: Path, output_path: Path, data: dict, files=None):
     data = _normalizar_requerente(data)
     with open(template_path, "r", encoding="utf-8") as f:
         soup = BeautifulSoup(f.read(), "html.parser")
+    if data.get("_arquivos_nao_lidos"):
+        _inserir_aviso_leitura(soup, data["_arquivos_nao_lidos"])
 
     field_values = {
         "comarca_foro": resolve_comarca_foro(data),
@@ -3597,6 +3658,8 @@ def main():
         print(f"\nCampos NÃO encontrados nos documentos ({len(skipped)}) — revisar manualmente:")
         for s in skipped:
             print(f"  - {s}")
+    if data.get("_arquivos_nao_lidos"):
+        print(f"\n⚠ ARQUIVOS NÃO LIDOS (API indisponível) — gere de novo: {', '.join(data['_arquivos_nao_lidos'])}")
     if conflicts:
         print(f"\n⚠ DIVERGÊNCIAS entre documentos — confirme manualmente:")
         for k, vals in conflicts.items():

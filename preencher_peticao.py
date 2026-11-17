@@ -2484,6 +2484,7 @@ div.fn{font-size:9.5pt; color:#444; margin:0 0 4px 0; text-indent:0; font-family
 div.fn a{color:#2b5fa3;}
 """
 
+_PDF_HEADER_GAP_PT = 18  # folga entre o timbrado do cabecalho e o 1o texto (~0,6 cm)
 _PDF_MAX_PAGINAS = 300  # trava de seguranca contra loop infinito em HTML malformado
 _PDF_MAX_ITERACOES_RODAPE = 4
 
@@ -2496,6 +2497,16 @@ def _pdf_img_size(data_uri):
         raw = base64.b64decode(data_uri.split(",", 1)[1])
         with Image.open(io.BytesIO(raw)) as im:
             return im.size
+    except Exception:
+        return None
+
+
+def _pdf_bytes_da_imagem(data_uri):
+    """Bytes de uma imagem data:URI (base64), ou None se nao for uma."""
+    if not data_uri or not data_uri.startswith("data:image/"):
+        return None
+    try:
+        return base64.b64decode(data_uri.split(",", 1)[1])
     except Exception:
         return None
 
@@ -2657,9 +2668,12 @@ def render_pdf_with_footnotes(html_content: str) -> bytes:
     body_html = str(main)
 
     largura_conteudo = _PDF_PAGE_W_PT - 2 * _PDF_SIDE_MARGIN_PT
+    # o corpo comeca um respiro ABAIXO do timbrado (a imagem do cabecalho acaba
+    # logo depois do sublinhado do logo; sem folga o texto encosta nele)
+    corpo_topo = header_h + _PDF_HEADER_GAP_PT if header_h else 0.0
     alturas = {}
     for _ in range(_PDF_MAX_ITERACOES_RODAPE):
-        rects, citas_por_pagina = _pdf_flow_body(body_html, nota_id_por_marca, alturas, header_h, footer_h)
+        rects, citas_por_pagina = _pdf_flow_body(body_html, nota_id_por_marca, alturas, corpo_topo, footer_h)
         novas_alturas = {
             pn: _pdf_altura_notas(notes_html, sorted(notas), largura_conteudo)
             for pn, notas in citas_por_pagina.items()
@@ -2674,20 +2688,29 @@ def render_pdf_with_footnotes(html_content: str) -> bytes:
     body_story = pymupdf.Story(html=body_html, user_css=_PDF_BODY_CSS)
     _IMG_CSS = "img{width:100%; display:block;}"
 
+    # O timbrado (cabecalho/rodape, com as faixas azuis do designer) e colocado
+    # DEPOIS, direto na pagina, por insert_image: no Story, "img{width:100%}"
+    # saia com so ~62% (cabecalho) / ~72% (rodape) da largura da pagina e
+    # deslocado pela margem padrao do Story, e as faixas paravam no meio da
+    # pagina em vez de sangrar de borda a borda. So cai de volta no Story se a
+    # imagem nao for um data:URI que de pra decodificar.
+    header_bytes = _pdf_bytes_da_imagem(header_src)
+    footer_bytes = _pdf_bytes_da_imagem(footer_src)
+
     buf = io.BytesIO()
     writer = pymupdf.DocumentWriter(buf)
     mediabox = pymupdf.Rect(0, 0, _PDF_PAGE_W_PT, _PDF_PAGE_H_PT)
     for page_num, rect in enumerate(rects):
         dev = writer.begin_page(mediabox)
-        # cabecalho/rodape sao uma Story NOVA a cada pagina -- assim como o
-        # corpo, uma Story "consome" o que ja foi desenhado a cada
-        # place()+draw(); reaproveitar a mesma instancia faria a imagem
-        # aparecer só na primeira pagina e sumir nas seguintes.
-        if header_src:
+        # cabecalho/rodape (so no caminho de reserva) sao uma Story NOVA a
+        # cada pagina -- assim como o corpo, uma Story "consome" o que ja foi
+        # desenhado a cada place()+draw(); reaproveitar a mesma instancia
+        # faria a imagem aparecer só na primeira pagina e sumir nas seguintes.
+        if header_src and not header_bytes:
             header_story = pymupdf.Story(html=f'<img src="{header_src}">', user_css=_IMG_CSS)
             header_story.place(pymupdf.Rect(0, 0, _PDF_PAGE_W_PT, header_h))
             header_story.draw(dev)
-        if footer_src:
+        if footer_src and not footer_bytes:
             footer_story = pymupdf.Story(html=f'<img src="{footer_src}">', user_css=_IMG_CSS)
             footer_story.place(pymupdf.Rect(0, _PDF_PAGE_H_PT - footer_h, _PDF_PAGE_W_PT, _PDF_PAGE_H_PT))
             footer_story.draw(dev)
@@ -2704,7 +2727,31 @@ def render_pdf_with_footnotes(html_content: str) -> bytes:
             nota_story.draw(dev)
         writer.end_page()
     writer.close()
-    return buf.getvalue()
+
+    if not (header_bytes or footer_bytes):
+        return buf.getvalue()
+    doc = pymupdf.open(stream=buf.getvalue(), filetype="pdf")
+    try:
+        rect_header = pymupdf.Rect(0, 0, _PDF_PAGE_W_PT, header_h)
+        rect_footer = pymupdf.Rect(0, _PDF_PAGE_H_PT - footer_h, _PDF_PAGE_W_PT, _PDF_PAGE_H_PT)
+        xref_header = xref_footer = 0
+        for page in doc:
+            # overlay=False: a imagem fica ATRAS do texto; a 1a insercao grava a
+            # imagem no PDF e as demais paginas reaproveitam o mesmo xref (o
+            # PDF nao carrega uma copia do timbrado por pagina).
+            if header_bytes:
+                xref_header = page.insert_image(
+                    rect_header, stream=None if xref_header else header_bytes,
+                    xref=xref_header, keep_proportion=False, overlay=False,
+                )
+            if footer_bytes:
+                xref_footer = page.insert_image(
+                    rect_footer, stream=None if xref_footer else footer_bytes,
+                    xref=xref_footer, keep_proportion=False, overlay=False,
+                )
+        return doc.tobytes(garbage=3, deflate=True)
+    finally:
+        doc.close()
 
 
 # ---------------------------------------------------------------------------
@@ -2977,6 +3024,9 @@ def _docx_set_brand_image(story, img_tag, largura_pagina, margem_esq, margem_dir
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
+    # espacamento SIMPLES: o estilo Normal usa 1,15 e o Word escalaria a linha
+    # da imagem junto, abrindo uma folga em branco ao lado das faixas.
+    p.paragraph_format.line_spacing = 1.0
     p.paragraph_format.left_indent = Emu(-margem_esq)
     p.paragraph_format.right_indent = Emu(-margem_dir)
     run = p.add_run()
@@ -3175,8 +3225,11 @@ def render_docx(html_content: str) -> bytes:
     # timbrado de cada arquivo.
     section.top_margin = Cm(3.0)
     section.bottom_margin = Cm(2.6)
-    section.header_distance = Cm(0.3)
-    section.footer_distance = Cm(0.3)
+    # distancia ZERO da borda: as faixas do timbrado sangram ate o topo/base da
+    # pagina (como no PDF e no navegador); 0,3 cm deixava uma tira branca
+    # acima da faixa de cima e abaixo da faixa de baixo.
+    section.header_distance = Cm(0)
+    section.footer_distance = Cm(0)
 
     altura_header = _docx_set_brand_image(
         section.header, thead_img, section.page_width, section.left_margin, section.right_margin
@@ -3185,9 +3238,9 @@ def render_docx(html_content: str) -> bytes:
         section.footer, tfoot_img, section.page_width, section.left_margin, section.right_margin
     )
     if altura_header:
-        section.top_margin = Emu(int(altura_header) + int(Cm(0.6)))
+        section.top_margin = Emu(int(altura_header) + int(Cm(0.6)))  # mesma folga do PDF (~0,6 cm)
     if altura_footer:
-        section.bottom_margin = Emu(int(altura_footer) + int(Cm(0.6)))
+        section.bottom_margin = Emu(int(altura_footer) + int(Cm(0.3)))
 
     largura_conteudo = section.page_width - section.left_margin - section.right_margin
     largura_cropada = int(largura_conteudo * 0.6)

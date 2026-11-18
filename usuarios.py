@@ -6,10 +6,12 @@ cadastrados pela tela "Usuarios" do proprio sistema (so o administrador abre)
 e ficam guardados com a senha em HASH (pbkdf2-sha256, nunca em texto puro).
 
 Onde ficam guardados:
-    * banco Upstash Redis (REST) -- quando UPSTASH_REDIS_REST_URL/_TOKEN (ou
-      KV_REST_API_URL/_TOKEN, os nomes que o Vercel injeta ao conectar o banco
-      pelo painel, aba Storage) estao definidas. E o unico jeito de os usuarios
-      sobreviverem no Vercel, onde o disco e apagado a cada deploy/instancia.
+    * banco Redis -- e o unico jeito de os usuarios sobreviverem no Vercel, onde
+      o disco e apagado a cada deploy/instancia. Duas formas de conectar, ambas
+      criadas pelo Vercel ao ligar o banco ao projeto (aba Storage):
+        - REDIS_URL (rediss://usuario:senha@host:porta), Redis comum/Redis Cloud;
+        - UPSTASH_REDIS_REST_URL/_TOKEN (ou KV_REST_API_URL/_TOKEN), Upstash via
+          API REST (sem driver). Se as duas existirem, vale a REST.
     * arquivo usuarios.json ao lado do app -- so quando roda no seu computador
       e nao ha banco configurado. No Vercel sem banco, o cadastro fica
       indisponivel (a tela avisa), em vez de aceitar usuarios que sumiriam.
@@ -88,6 +90,53 @@ class _BancoRest:
         return {plano[i]: json.loads(plano[i + 1]) for i in range(0, len(plano) - 1, 2)}
 
 
+_clientes_redis = {}
+
+
+class _BancoRedis:
+    """Hash `CHAVE_REDIS` num Redis comum (protocolo nativo, URL rediss://...),
+    o que o Vercel injeta em REDIS_URL ao conectar um Redis (Redis Cloud) ao projeto."""
+
+    nome = "banco"
+
+    def __init__(self, url):
+        self._url = url
+
+    def _redis(self):
+        cliente = _clientes_redis.get(self._url)
+        if cliente is None:
+            try:
+                import redis
+            except ImportError as e:  # pacote "redis" fora do requirements.txt
+                raise UsuariosIndisponivel("pacote 'redis' não instalado neste servidor") from e
+            cliente = redis.Redis.from_url(
+                self._url, decode_responses=True, socket_connect_timeout=8, socket_timeout=10
+            )
+            _clientes_redis[self._url] = cliente
+        return cliente
+
+    def _executar(self, funcao):
+        import redis
+
+        try:
+            return funcao(self._redis())
+        except redis.exceptions.RedisError as e:
+            raise UsuariosIndisponivel(f"banco de usuários inacessível ({type(e).__name__})") from e
+
+    def obter(self, chave):
+        valor = self._executar(lambda r: r.hget(CHAVE_REDIS, chave))
+        return json.loads(valor) if valor else None
+
+    def salvar(self, chave, registro):
+        self._executar(lambda r: r.hset(CHAVE_REDIS, chave, json.dumps(registro, ensure_ascii=False)))
+
+    def remover(self, chave):
+        return bool(self._executar(lambda r: r.hdel(CHAVE_REDIS, chave)))
+
+    def todos(self):
+        return {k: json.loads(v) for k, v in self._executar(lambda r: r.hgetall(CHAVE_REDIS)).items()}
+
+
 _TRAVA_ARQUIVO = threading.Lock()
 
 
@@ -144,10 +193,18 @@ def _config_rest():
     return (url.rstrip("/"), token) if url and token else None
 
 
+def _config_redis_url():
+    url = (os.environ.get("REDIS_URL") or os.environ.get("KV_URL") or "").strip()
+    return url if url.startswith(("redis://", "rediss://")) else ""
+
+
 def _backend():
     cfg = _config_rest()
     if cfg:
         return _BancoRest(*cfg)
+    url = _config_redis_url()
+    if url:
+        return _BancoRedis(url)
     if os.environ.get("VERCEL"):
         return None  # disco efemero: usuarios gravados aqui sumiriam
     return _Arquivo(ARQUIVO_PADRAO)

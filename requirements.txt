@@ -13,3 +13,4 @@ openpyxl
 python-docx
 gunicorn
 httpx
+redis

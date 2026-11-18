@@ -68,9 +68,13 @@ No Vercel o disco é apagado a cada deploy, então os usuários precisam de um
 banco. Passo a passo:
 
 1. No painel do Vercel, abra o projeto → aba **Storage** → **Create Database**
-   → **Upstash Redis** (plano gratuito) → conecte ao projeto.
-2. O Vercel cria sozinho as variáveis `UPSTASH_REDIS_REST_URL` e
-   `UPSTASH_REDIS_REST_TOKEN` (ou `KV_REST_API_URL`/`KV_REST_API_TOKEN`).
+   → **Redis** (Redis Cloud) ou **Upstash Redis** (planos gratuitos) → conecte
+   ao projeto.
+2. O Vercel cria sozinho as variáveis: `REDIS_URL` (Redis comum, endereço
+   `rediss://...`) ou `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` (ou
+   `KV_REST_API_URL`/`KV_REST_API_TOKEN`). O sistema aceita qualquer uma.
+   Se criou o banco fora do Vercel, cadastre `REDIS_URL` em Settings →
+   Environment Variables.
 3. Faça um novo deploy (**Deployments → Redeploy**). A tela Usuários passa a
    aceitar cadastros.
 

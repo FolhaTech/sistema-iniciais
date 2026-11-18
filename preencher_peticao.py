@@ -537,7 +537,10 @@ pode aparecer solto na pasta com nome genérico tipo "imagem.png" — reconheça
 pelo nome do arquivo: (1) um print do "CADASTRO NACIONAL DA PESSOA JURÍDICA" / "COMPROVANTE DE \
 INSCRIÇÃO E DE SITUAÇÃO CADASTRAL" da Receita Federal, com campos como "NÚMERO DE INSCRIÇÃO" \
 (= CNPJ) e "NOME EMPRESARIAL" (= razão social, use esse para operadora_nome — não o "TÍTULO DO \
-ESTABELECIMENTO/NOME DE FANTASIA"). O endereço nesse card vem em DUAS linhas separadas, as duas \
+ESTABELECIMENTO/NOME DE FANTASIA"). operadora_nome é SEMPRE a razão social COMPLETA, com a \
+forma societária (ex: "AMIL ASSISTENCIA MEDICA INTERNACIONAL S.A"), nunca só a marca ("Amil") \
+que aparece na carteirinha, no logotipo ou no e-mail; se o documento só mostrar a marca, procure \
+a razão social em outro documento do lote (CNPJ, ANS, carta de negativa) antes de usar a marca. O endereço nesse card vem em DUAS linhas separadas, as duas \
 IMPORTANTES — não pare na primeira: uma linha de cima com "LOGRADOURO", "NÚMERO" e \
 "COMPLEMENTO" (ex: "R SANTOS DUMONT" / "2705" / "SALA 10"), e uma linha de baixo com "CEP", \
 "BAIRRO/DISTRITO", "MUNICÍPIO" e "UF". Preencha operadora_logradouro e operadora_numero com os \
@@ -716,7 +719,18 @@ se a própria Requerente tivesse feito o contato diretamente ("a Requerente entr
 contato...") — só mencione que foi "por meio de representante legal" ou de outra pessoa se \
 algum documento mostrar EXPLICITAMENTE que não foi a cliente quem contatou a operadora. Estilo \
 de cada item: "Com a referida prescrição médica, a Requerente entrou em contato com a \
-Requerida, via e-mail, em [data], solicitando autorização [...]".
+Requerida, via e-mail, em [data], solicitando autorização [...]". ORDEM E DATAS — o campo "data" \
+de cada item é a data em que o FATO NARRADO NAQUELE PARÁGRAFO aconteceu (o e-mail foi enviado, a \
+ligação foi feita, a negativa foi comunicada, a consulta foi realizada), NUNCA a data de um evento \
+futuro apenas citado no texto (ex: "foi agendada consulta para 27/10" — a data do item é a do \
+contato que informou o agendamento, não 27/10; se ela não aparece, repita a data do item \
+anterior). Itens com expressões relativas ("No mesmo dia", "Posteriormente", "Na oportunidade") \
+levam a data do fato a que se referem, e ficam logo depois dele. Escreva sempre a data completa \
+AAAA-MM-DD, com o ano de 4 dígitos conferido no documento. A ÚLTIMA parte da cronologia \
+costuma ser a resposta da operadora: a carta/e-mail de NEGATIVA (com os motivos e as diretrizes/\
+normas citadas, para cada procedimento negado), consultas realizadas depois dela e o e-mail/pedido \
+de esclarecimento sem resposta — cada um é um item próprio, posterior às solicitações; a negativa \
+NUNCA vem antes do pedido que ela responde.
 
 - recebeu_negativa_formal: true somente se algum documento mostrar uma negativa POR ESCRITO \
 e formal da operadora (carta, e-mail oficial de negativa). Se a cliente só recebeu \
@@ -1676,6 +1690,10 @@ def _merge_pair(a, b):
     for k, v in b.items():
         if k in CAMPOS_LISTA_UNIAO:
             existentes = out.get(k) or []
+            if k == "fatos_lista":
+                # fixa a data dos itens sem data dentro de cada metade, antes de juntar
+                existentes = _fatos_com_data_herdada(existentes)
+                v = _fatos_com_data_herdada(v)
             novos = [item for item in (v or []) if item not in existentes]
             if existentes or novos:
                 out[k] = existentes + novos
@@ -1801,6 +1819,10 @@ def merge_results(all_results):
                 v = r.get(key)
                 if not _valor_valido(v):
                     continue
+                if key == "fatos_lista":
+                    # fixa a data dos itens sem data DENTRO do proprio lote,
+                    # antes da uniao (ver _fatos_com_data_herdada)
+                    v = _fatos_com_data_herdada(v)
                 lote = r.get("_grupo_lote")
                 if lote not in melhor_por_lote or len(v) > len(melhor_por_lote[lote]):
                     melhor_por_lote[lote] = v
@@ -1862,37 +1884,130 @@ def merge_results(all_results):
 
 
 def _data_para_iso(data):
-    """Normaliza a data de um fato para AAAA-MM-DD (aceita tambem DD/MM/AAAA,
-    caso o modelo devolva fora do formato pedido). Devolve "" se nao der."""
+    """Normaliza a data de um fato para AAAA-MM-DD (aceita tambem DD/MM/AAAA e
+    DD/MM/AA, caso o modelo devolva fora do formato pedido). Devolve "" se nao
+    der."""
     data = (data or "").strip()
     if re.match(r"^\d{4}-\d{2}-\d{2}$", data):
         return data
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", data)
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b", data)
     if m:
-        return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+        ano = m.group(3) if len(m.group(3)) == 4 else "20" + m.group(3)
+        return f"{ano}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
     return ""
+
+
+def _fatos_com_data_herdada(itens):
+    """Devolve os itens de UMA lista de fatos como dicts {"data" ISO, "texto"},
+    com a data dos itens sem data herdada do item anterior DA MESMA LISTA (ex:
+    "No mesmo dia, ..." logo depois de um e-mail datado). Tem que rodar antes
+    de juntar listas de lotes diferentes: depois da uniao, o "item anterior" de
+    um fato sem data seria de outro lote e ele iria parar no lugar errado."""
+    saida = []
+    data_anterior = ""
+    for item in itens or []:
+        if isinstance(item, dict):
+            data = _data_para_iso(item.get("data"))
+            texto = (item.get("texto") or "").strip()
+            herdada = bool(item.get("data_herdada")) and bool(data)
+        else:
+            data, texto, herdada = "", str(item or "").strip(), False
+        if not data:
+            data = data_anterior
+            herdada = bool(data)
+        data_anterior = data
+        if texto:
+            # "data_herdada": a data nao e do proprio fato (serve so para
+            # ordenar); _fatos_sao_o_mesmo a trata como desconhecida
+            saida.append({"data": data, "texto": texto, "data_herdada": herdada})
+    return saida
+
+
+# Palavras que NAO identificam o fato: o estilo imposto aos itens ("Com a
+# referida prescricao medica, a Requerente entrou em contato com a Requerida,
+# via ...") e o canal (e-mail/site/app) mudam de um relato para outro do MESMO
+# fato, entao ficam fora da comparacao.
+_FATO_PALAVRAS_IGNORADAS = {
+    "referida", "prescricao", "medica", "requerente", "requerida", "entrou", "contato", "meio",
+    "via", "mail", "email", "site", "aplicativo", "app", "whatsapp", "telefone", "telefonico",
+    "operadora", "plano", "saude", "especificada", "data", "ocasiao", "momento", "oportunidade",
+    "numero", "protocolo", "gerando", "gerado", "registrado", "para", "como", "pela", "pelo",
+    "pelos", "pelas", "uma", "umas", "dos", "das", "que", "seu", "sua", "seus", "suas", "nos",
+    "nas", "entre", "sobre", "mesmo", "mesma", "dia", "assim", "bem", "com", "por",
+}
+
+
+def _fato_palavras(texto):
+    """Conjunto de palavras que identificam o fato (sem acento, sem numeros,
+    sem as palavras de _FATO_PALAVRAS_IGNORADAS)."""
+    palavras = re.findall(r"[a-z]+", _normalize_text(texto))
+    return {p for p in palavras if len(p) > 3 and p not in _FATO_PALAVRAS_IGNORADAS}
+
+
+def _fato_protocolos(texto):
+    """Numeros de protocolo citados no texto (sequencias de 6+ digitos
+    seguidos; datas e CPF/CNPJ tem pontuacao no meio, nao entram)."""
+    return set(re.findall(r"(?<![\d./-])\d{6,}(?![\d/-])", texto))
+
+
+def _fatos_sao_o_mesmo(a, b):
+    """True se os itens a e b ({"data", "texto"}) relatam o MESMO fato com
+    outras palavras -- o mesmo pedido descrito a partir de documentos
+    diferentes (print do e-mail, tela do protocolo no site...) vira itens
+    quase iguais em lotes diferentes, e a uniao de lotes so tira os
+    IDENTICOS (ver merge_results). Conservador: so junta quando nenhum
+    indicio aponta para fatos diferentes."""
+    da = "" if a.get("data_herdada") else a["data"]
+    db = "" if b.get("data_herdada") else b["data"]
+    if da and db and da != db:
+        return False  # datas diferentes: fatos diferentes (mesmo que citem o mesmo protocolo)
+    pa, pb = _fato_protocolos(a["texto"]), _fato_protocolos(b["texto"])
+    if pa and pb and not (pa & pb):
+        return False  # protocolos diferentes: pedidos diferentes (ex: e-mail e app no mesmo dia)
+    wa, wb = _fato_palavras(a["texto"]), _fato_palavras(b["texto"])
+    if not wa or not wb:
+        return False
+    cobertura = len(wa & wb) / min(len(wa), len(wb))
+    if pa & pb:
+        return cobertura >= 0.3  # mesmo protocolo e mesma data (ou uma sem data)
+    return bool(da and db) and cobertura >= 0.5  # sem protocolo em comum: exige mesma data
+
+
+def _deduplicar_fatos(itens):
+    """Junta itens que relatam o mesmo fato (ver _fatos_sao_o_mesmo),
+    ficando com o mais completo: o que tem data, depois o mais longo. A
+    posicao na lista e a do primeiro dos itens juntados."""
+    itens = [dict(i) for i in itens]
+    mudou = True
+    while mudou:
+        mudou = False
+        for i in range(len(itens)):
+            for j in range(i + 1, len(itens)):
+                if _fatos_sao_o_mesmo(itens[i], itens[j]):
+                    a, b = itens[i], itens[j]
+                    melhor = max(
+                        (a, b), key=lambda f: (bool(f["data"] and not f.get("data_herdada")), len(f["texto"]))
+                    )
+                    itens[i] = dict(melhor)
+                    del itens[j]
+                    mudou = True
+                    break
+            if mudou:
+                break
+    return itens
 
 
 def _ordenar_fatos(itens):
     """fatos_lista vira texto corrido em ordem cronologica. Cada item traz a
     data do proprio fato; itens sem data herdam a data do item anterior (ex:
     um complemento logo depois de um e-mail datado), para ficarem ao lado do
-    fato a que se referem. Empate de data preserva a ordem original. Devolve
+    fato a que se referem. Itens que relatam o mesmo fato sao juntados (ver
+    _deduplicar_fatos). Empate de data preserva a ordem original. Devolve
     a lista de strings, pronta para a petição."""
     if not itens:
         return []
-    marcados = []
-    data_anterior = ""
-    for ordem, item in enumerate(itens):
-        if isinstance(item, dict):
-            data = _data_para_iso(item.get("data"))
-            texto = (item.get("texto") or "").strip()
-        else:
-            data, texto = "", str(item or "").strip()
-        data = data or data_anterior
-        data_anterior = data
-        if texto:
-            marcados.append((data, ordem, texto))
+    itens = _deduplicar_fatos(_fatos_com_data_herdada(itens))
+    marcados = [(f["data"], ordem, f["texto"]) for ordem, f in enumerate(itens)]
     marcados.sort(key=lambda t: (t[0], t[1]))
     return [texto for _, _, texto in marcados]
 
@@ -1971,6 +2086,44 @@ def operadora_incompleta(data):
     return any(not _valor_valido(data.get(k)) for k in OPERADORA_CAMPOS_OBRIGATORIOS)
 
 
+# Tokens que indicam razao social completa (forma societaria/juridica). Um
+# nome sem nenhum deles e curto ("Amil", "Unimed Paulistana") e quase sempre
+# e a MARCA/nome fantasia lido da carteirinha ou de um e-mail, nao o "NOME
+# EMPRESARIAL" do cartao de CNPJ ("AMIL ASSISTENCIA MEDICA INTERNACIONAL S.A").
+_RAZAO_SOCIAL_RE = re.compile(
+    r"(?:\bs\.?\s?/?\s?a\.?(?=\s|$)|\bltda\b|\beireli\b|\bepp\b|\bsociedade\b|\bassocia[cç][aã]o\b"
+    r"|\bcooperativa\b|\bfunda[cç][aã]o\b|\bsa\b)",
+    re.IGNORECASE,
+)
+
+
+def _nome_operadora_incompleto(nome):
+    """True se `nome` esta vazio ou parece so a marca (<= 2 palavras e sem
+    forma societaria), a ser substituido pela razao social completa."""
+    if not _valor_valido(nome):
+        return True
+    return len(str(nome).split()) <= 2 and not _RAZAO_SOCIAL_RE.search(str(nome))
+
+
+def _melhor_nome_operadora(atual, novo):
+    """Entre o nome que a passada principal achou (`atual`) e o da consulta
+    focada na operadora (`novo`), devolve o que deve ficar: so troca quando
+    `atual` e so a marca e `novo` e a razao social completa que a contem
+    (ex: "Amil" -> "AMIL ASSISTENCIA MEDICA INTERNACIONAL S.A")."""
+    if not _valor_valido(novo):
+        return atual
+    novo = str(novo).strip()
+    if not _valor_valido(atual):
+        return novo
+    if not _nome_operadora_incompleto(atual):
+        return atual
+    palavras_atual = set(_normalize_text(str(atual)).split())
+    palavras_novo = set(_normalize_text(novo).split())
+    if palavras_atual <= palavras_novo and len(novo) > len(str(atual)):
+        return novo
+    return atual
+
+
 def _operadora_precisa_mais_consulta(data):
     """Como operadora_incompleta(), mas tambem conta operadora_email como
     pendente -- o e-mail nao e um campo "obrigatorio" (a peticao sai correta
@@ -1979,8 +2132,13 @@ def _operadora_precisa_mais_consulta(data):
     e-mail (ex: a carteirinha ou uma carta de negativa), completar_dados_
     operadora nao pode parar de consultar lotes assim que o endereco
     completar -- senao nunca chega a ver o lote que de fato tinha o
-    e-mail."""
-    return operadora_incompleta(data) or not _valor_valido(data.get("operadora_email"))
+    e-mail. Tambem conta o nome da operadora quando ele parece so a marca
+    (ver _nome_operadora_incompleto)."""
+    return (
+        operadora_incompleta(data)
+        or not _valor_valido(data.get("operadora_email"))
+        or _nome_operadora_incompleto(data.get("operadora_nome"))
+    )
 
 
 def _call_operadora_leitor(files, label):
@@ -2043,7 +2201,10 @@ def completar_dados_operadora(client, model, files, data):
         for future in concurrent.futures.as_completed(futures):
             achado = future.result()
             for k in OPERADORA_CAMPOS:
-                if not _valor_valido(data.get(k)) and _valor_valido(achado.get(k)):
+                if k == "operadora_nome":
+                    # tambem troca a marca ("Amil") pela razao social completa
+                    data[k] = _melhor_nome_operadora(data.get(k), achado.get(k))
+                elif not _valor_valido(data.get(k)) and _valor_valido(achado.get(k)):
                     data[k] = achado[k].strip()
     return data
 

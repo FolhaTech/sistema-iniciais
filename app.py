@@ -12,11 +12,13 @@ Uso:
 Depois abra http://127.0.0.1:5000 no navegador.
 Requer a variável de ambiente ANTHROPIC_API_KEY (veja COMO_USAR.txt).
 """
+import datetime
 import functools
 import hmac
 import os
 import secrets
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -25,6 +27,8 @@ from werkzeug.utils import secure_filename
 
 import preencher_peticao as pp
 import sharepoint_client as sp
+import ui_tema
+import usuarios
 
 app = Flask(__name__)
 
@@ -59,36 +63,29 @@ UPLOAD_PAGE = """
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Preencher Petição — Reparadoras</title>
+<title>Preencher Petição — Arantes Arimura</title>
+<!--HEAD-->
 <style>
-  body{font-family:Arial,Helvetica,sans-serif;background:#e7e7e7;margin:0;padding:0;}
-  .navy{background:#1a2744;color:#fff;padding:18px 26px;}
-  .navy h1{margin:0;font-size:18px;}
-  .navy p{margin:6px 0 0 0;font-size:13px;color:#cfd6e6;}
-  main{max-width:700px;margin:30px auto;background:#fff;padding:30px 36px;border-radius:6px;box-shadow:0 0 12px rgba(0,0,0,.12);}
-  .erro{background:#fdecea;border:1px solid #f5988c;color:#7a1f13;padding:14px 18px;border-radius:4px;margin-bottom:20px;font-size:14px;}
-  label{display:block;font-weight:bold;margin:18px 0 6px 0;font-size:14px;}
-  input[type=file]{display:block;width:100%;padding:10px;border:2px dashed #999;border-radius:4px;background:#fafafa;}
-  select{padding:8px;font-size:14px;width:100%;border:1px solid #ccc;border-radius:4px;}
-  #lista{font-size:12.5px;color:#444;margin-top:10px;max-height:160px;overflow-y:auto;background:#f7f7f7;padding:8px 12px;border-radius:4px;}
-  .origem-row{display:flex;gap:20px;margin-top:6px;}
-  .origem-row label{display:flex;align-items:center;gap:6px;font-weight:normal;font-size:13.5px;margin:0;cursor:pointer;}
+  input[type=file]{display:block;width:100%;padding:12px;border:2px dashed #b9b6b6;border-radius:6px;background:#fafafa;font:inherit;font-size:13.5px;}
+  #lista{font-size:12.5px;color:#444;margin-top:10px;max-height:160px;overflow-y:auto;background:#f6f5f5;padding:8px 12px;border-radius:6px;}
+  #lista:empty{display:none;}
+  .origem-row{display:flex;gap:22px;margin-top:6px;flex-wrap:wrap;}
+  .origem-row label{display:flex;align-items:center;gap:6px;font-weight:400;font-size:13.5px;margin:0;cursor:pointer;color:var(--texto);}
   .origem-row label.desabilitado{color:#999;cursor:not-allowed;}
-  .origem-row input[type=radio]{margin:0;}
-  button{margin-top:22px;background:#3a6ea5;color:#fff;border:none;padding:12px 22px;font-size:15px;border-radius:4px;cursor:pointer;}
-  button:hover{background:#4a80bb;}
-  button:disabled{background:#999;cursor:wait;}
-  #status{margin-top:16px;font-size:13.5px;color:#444;display:none;}
-  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#3a6ea5;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:8px;}
+  .origem-row input[type=radio]{margin:0;accent-color:var(--vermelho);}
+  #status{margin-top:18px;font-size:13.5px;color:#444;display:none;}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--vermelho);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:8px;}
   @keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
-<div class="navy">
-  <h1>Preencher Petição Inicial — Cirurgias Reparadoras</h1>
-  <p>Escolha a pasta com os documentos do cliente. O sistema lê tudo (inclusive subpastas) e preenche o modelo automaticamente.</p>
-</div>
-<main>
+<!--TOPO-->
+<section class="hero">
+  <h1>Preencher Petição Inicial</h1>
+  <p>Cirurgias reparadoras: escolha a pasta com os documentos do cliente. O sistema lê tudo (inclusive subpastas) e preenche o modelo automaticamente.</p>
+</section>
+<main class="painel">
+<div class="cartao moldura">
   {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
   <form action="/processar" method="post" enctype="multipart/form-data" id="form" onsubmit="return aoEnviar()">
     <label>Origem dos documentos</label>
@@ -120,9 +117,10 @@ UPLOAD_PAGE = """
       {% endfor %}
     </select>
 
-    <button type="submit" id="btn" {% if erro %}disabled{% endif %}>Processar e gerar petição</button>
+    <button type="submit" class="btn" id="btn" {% if erro %}disabled{% endif %}>Processar e gerar petição</button>
     <div id="status"><span class="spinner"></span><span id="status-texto"></span></div>
   </form>
+</div>
 </main>
 <script>
 const EXT_OK = ['.pdf', '.png', '.jpg', '.jpeg', '.xlsx', '.docx'];
@@ -207,34 +205,143 @@ LOGIN_PAGE = """
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Entrar — Preencher Petição</title>
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;background:#e7e7e7;margin:0;padding:0;}
-  .navy{background:#1a2744;color:#fff;padding:18px 26px;}
-  .navy h1{margin:0;font-size:18px;}
-  main{max-width:360px;margin:60px auto;background:#fff;padding:30px 36px;border-radius:6px;box-shadow:0 0 12px rgba(0,0,0,.12);}
-  .erro{background:#fdecea;border:1px solid #f5988c;color:#7a1f13;padding:14px 18px;border-radius:4px;margin-bottom:20px;font-size:14px;}
-  label{display:block;font-weight:bold;margin:14px 0 6px 0;font-size:14px;}
-  input[type=text],input[type=password]{width:100%;padding:9px;font-size:14px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;}
-  button{margin-top:22px;background:#3a6ea5;color:#fff;border:none;padding:12px 22px;font-size:15px;border-radius:4px;cursor:pointer;width:100%;}
-  button:hover{background:#4a80bb;}
-</style>
+<title>Entrar — Arantes Arimura</title>
+<!--HEAD-->
+<style>.painel{max-width:440px;}</style>
 </head>
 <body>
-<div class="navy"><h1>Preencher Petição Inicial</h1></div>
-<main>
-  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+<!--TOPO-->
+<section class="hero">
+  <h1>Preencher Petição Inicial</h1>
+  <p>Acesso restrito à equipe do escritório.</p>
+</section>
+<main class="painel">
+<div class="cartao moldura">
+  <h2 class="titulo">Entrar</h2>
+  <p class="sub">Informe seu login e senha.</p>
+  {% if erro %}<div class="erro" style="margin-top:16px;">{{ erro }}</div>{% endif %}
   <form method="post">
-    <label for="usuario">Usuário</label>
-    <input type="text" id="usuario" name="usuario" autofocus required>
+    <label for="usuario">Login</label>
+    <input type="text" id="usuario" name="usuario" autofocus required autocomplete="username">
     <label for="senha">Senha</label>
-    <input type="password" id="senha" name="senha" required>
-    <button type="submit">Entrar</button>
+    <input type="password" id="senha" name="senha" required autocomplete="current-password">
+    <button type="submit" class="btn btn-azul btn-bloco">Entrar</button>
   </form>
+</div>
 </main>
 </body>
 </html>
 """
+
+
+USUARIOS_PAGE = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Usuários — Arantes Arimura</title>
+<!--HEAD-->
+</head>
+<body>
+<!--TOPO-->
+<section class="hero">
+  <h1>Usuários do sistema</h1>
+  <p>Cadastre quem pode entrar com login e senha. Só o administrador vê esta tela.</p>
+</section>
+<main class="painel">
+  {% if msg %}<div class="ok">{{ msg }}</div>{% endif %}
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+
+  <div class="cartao moldura">
+    <h2 class="titulo">Cadastrar usuário</h2>
+    {% if not armazenamento %}
+      <div class="aviso" style="margin-top:16px;">
+        Este servidor não tem onde guardar os usuários: no Vercel o disco é apagado a cada deploy.
+        Crie um banco <strong>Upstash Redis</strong> no painel do Vercel (aba Storage) e conecte ao projeto;
+        as variáveis são criadas sozinhas. Depois faça um novo deploy. Passo a passo em DEPLOY.md.
+      </div>
+    {% else %}
+      <p class="sub">
+        {% if armazenamento == 'banco' %}Guardado no banco (Upstash Redis).
+        {% else %}Guardado no arquivo <code>usuarios.json</code>, só neste computador.{% endif %}
+        Se o login já existe, a senha dele é trocada.
+      </p>
+      <form method="post" autocomplete="off">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="acao" value="salvar">
+        <label for="usuario">Login</label>
+        <input type="text" id="usuario" name="usuario" required minlength="3" maxlength="64" autocomplete="off">
+        <label for="senha">Senha</label>
+        <input type="password" id="senha" name="senha" required minlength="8" maxlength="128" autocomplete="new-password">
+        <label for="confirmacao">Repetir a senha</label>
+        <input type="password" id="confirmacao" name="confirmacao" required minlength="8" maxlength="128" autocomplete="new-password">
+        <p class="dica">Login: 3 a 64 caracteres (letras, números, ponto, hífen, sublinhado ou @). Senha: mínimo 8 caracteres.</p>
+        <button type="submit" class="btn btn-azul">Salvar usuário</button>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="cartao">
+    <h2 class="titulo">Usuários cadastrados</h2>
+    <table class="lista">
+      <thead><tr><th>Login</th><th>Cadastrado em</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>{{ admin_nome }}<span class="etiqueta">administrador</span></td>
+          <td>definido no servidor</td>
+          <td class="acao"></td>
+        </tr>
+        {% for u in lista %}
+        <tr>
+          <td>{{ u.usuario }}</td>
+          <td>{{ u.criado_em }}</td>
+          <td class="acao">
+            <form method="post" onsubmit="return confirm('Remover este usuário? Ele perde o acesso na hora.');" style="display:inline;">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="acao" value="remover">
+              <input type="hidden" name="usuario" value="{{ u.usuario }}">
+              <button type="submit" class="btn btn-link">Remover</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not lista %}<p class="dica">Nenhum outro usuário cadastrado.</p>{% endif %}
+  </div>
+</main>
+</body>
+</html>
+"""
+
+UPLOAD_PAGE = ui_tema.aplicar(UPLOAD_PAGE)
+LOGIN_PAGE = ui_tema.aplicar(LOGIN_PAGE)
+USUARIOS_PAGE = ui_tema.aplicar(USUARIOS_PAGE)
+
+
+def _iguais(a, b):
+    """Comparacao em tempo constante (bytes: compare_digest recusa str com acento)."""
+    return hmac.compare_digest((a or "").encode("utf-8"), (b or "").encode("utf-8"))
+
+
+def _admin_config():
+    return os.environ.get("APP_USERNAME") or "", os.environ.get("APP_PASSWORD") or ""
+
+
+def _eh_admin():
+    # Sessao criada antes do cadastro de usuarios nao tem "usuario": so o
+    # administrador (APP_USERNAME) existia, entao ela vale como admin.
+    return bool(session.get("autenticado")) and (session.get("admin") is True or "usuario" not in session)
+
+
+@app.context_processor
+def _contexto_tema():
+    if not session.get("autenticado"):
+        return {"usuario_logado": "", "eh_admin": False}
+    return {
+        "usuario_logado": session.get("usuario") or _admin_config()[0],
+        "eh_admin": _eh_admin(),
+    }
 
 
 def login_required(view):
@@ -245,30 +352,63 @@ def login_required(view):
             # aceitam POST, e um redirect pos-login e sempre GET (dava 405).
             proxima = request.path if request.method == "GET" else None
             return redirect(url_for("login", next=proxima))
+        usuario = session.get("usuario")
+        if usuario and not session.get("admin") and not usuarios.existe(usuario):
+            session.clear()  # usuario removido na tela "Usuarios"
+            return redirect(url_for("login"))
         return view(*args, **kwargs)
     return wrapped
 
 
+def admin_required(view):
+    @login_required
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not _eh_admin():
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def _destino_seguro(destino):
+    """So aceita caminho do proprio site (evita redirecionar para fora apos o login)."""
+    if destino and destino.startswith("/") and not destino.startswith("//") and "\\" not in destino:
+        return destino
+    return url_for("index")
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    usuario_config = os.environ.get("APP_USERNAME") or ""
-    senha_config = os.environ.get("APP_PASSWORD") or ""
-    erro = None
-    if not usuario_config or not senha_config:
+    admin_nome, admin_senha = _admin_config()
+    if not admin_nome or not admin_senha:
         erro = (
             "APP_USERNAME/APP_PASSWORD não estão configurados neste servidor — "
             "o login não pode funcionar até isso ser definido (veja .env.example)."
         )
         return render_template_string(LOGIN_PAGE, erro=erro)
 
+    erro = None
     if request.method == "POST":
-        usuario = request.form.get("usuario", "")
-        senha = request.form.get("senha", "")
-        if hmac.compare_digest(usuario, usuario_config) and hmac.compare_digest(senha, senha_config):
+        usuario = (request.form.get("usuario") or "").strip()
+        senha = request.form.get("senha") or ""
+        entrou = None  # (nome, eh_admin)
+        if _iguais(usuario, admin_nome) and _iguais(senha, admin_senha):
+            entrou = (admin_nome, True)
+        else:
+            try:
+                if usuarios.verificar(usuario, senha):
+                    entrou = (usuario, False)
+            except usuarios.UsuariosIndisponivel as e:
+                print(f"[aviso] cadastro de usuários indisponível no login: {e}")
+                erro = "Não consegui consultar o cadastro de usuários agora. Tente de novo em instantes."
+        if entrou:
+            session.clear()  # sessao nova a cada login
             session["autenticado"] = True
+            session["usuario"], session["admin"] = entrou
             session.permanent = True
-            return redirect(request.args.get("next") or url_for("index"))
-        erro = "Usuário ou senha incorretos."
+            return redirect(_destino_seguro(request.args.get("next")))
+        erro = erro or "Usuário ou senha incorretos."
+        time.sleep(0.5)  # freia tentativa de adivinhar a senha
 
     return render_template_string(LOGIN_PAGE, erro=erro)
 
@@ -277,6 +417,80 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+def _csrf_token():
+    if not session.get("csrf"):
+        session["csrf"] = secrets.token_hex(16)
+    return session["csrf"]
+
+
+def _csrf_ok():
+    esperado = session.get("csrf") or ""
+    return bool(esperado) and _iguais(request.form.get("csrf") or "", esperado)
+
+
+_FUSO_BRASIL = datetime.timezone(datetime.timedelta(hours=-3))
+
+
+def _data_br(iso):
+    try:
+        return datetime.datetime.fromisoformat(iso).astimezone(_FUSO_BRASIL).strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        return iso or ""
+
+
+@app.route("/usuarios", methods=["GET", "POST"])
+@admin_required
+def usuarios_page():
+    if request.method == "POST":
+        if not _csrf_ok():
+            abort(400)
+        aviso = {}
+        acao = request.form.get("acao")
+        try:
+            if acao == "salvar":
+                login_novo = (request.form.get("usuario") or "").strip()
+                senha = request.form.get("senha") or ""
+                if senha != (request.form.get("confirmacao") or ""):
+                    raise usuarios.DadosInvalidos("A confirmação da senha não confere.")
+                if _iguais(login_novo.lower(), _admin_config()[0].lower()):
+                    raise usuarios.DadosInvalidos(
+                        "Esse login é o do administrador (definido no servidor). Escolha outro."
+                    )
+                resultado = usuarios.salvar(login_novo, senha)
+                aviso["msg"] = f"Usuário {login_novo} {resultado}."
+            elif acao == "remover":
+                alvo = (request.form.get("usuario") or "").strip()
+                if usuarios.remover(alvo):
+                    aviso["msg"] = f"Usuário {alvo} removido."
+                else:
+                    aviso["erro"] = "Esse usuário não existe mais."
+            else:
+                abort(400)
+        except (usuarios.DadosInvalidos, usuarios.UsuariosIndisponivel) as e:
+            aviso["erro"] = str(e)
+        session["aviso_usuarios"] = aviso
+        return redirect(url_for("usuarios_page"))
+
+    aviso = session.pop("aviso_usuarios", None) or {}
+    lista, erro = [], aviso.get("erro")
+    if usuarios.disponivel():
+        try:
+            lista = [
+                {"usuario": u["usuario"], "criado_em": _data_br(u["criado_em"])} for u in usuarios.listar()
+            ]
+        except usuarios.UsuariosIndisponivel as e:
+            erro = erro or str(e)
+    return render_template_string(
+        USUARIOS_PAGE,
+        msg=aviso.get("msg"),
+        erro=erro,
+        csrf=_csrf_token(),
+        armazenamento=usuarios.nome_backend(),
+        lista=lista,
+        admin_nome=_admin_config()[0],
+    )
 
 
 def api_key_error():

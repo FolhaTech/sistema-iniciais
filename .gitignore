@@ -1,5 +1,8 @@
 # Segredos e configuração local (use .env.example como modelo)
 .env
+# Usuários cadastrados na tela "Usuários" quando roda local (só hashes de senha)
+usuarios.json
+usuarios.tmp
 
 # Dados reais de clientes -- NUNCA versionar (petições geradas, uploads
 # temporários, arquivos soltos na raiz que continham dados de clientes reais

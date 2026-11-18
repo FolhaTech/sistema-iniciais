@@ -57,6 +57,27 @@ autenticar) e depois `npx vercel --prod` dentro da pasta do projeto. As
 variáveis de ambiente do passo 3 ainda precisam ser configuradas (`npx
 vercel env add NOME_DA_VARIAVEL`) antes do deploy funcionar de verdade.
 
+## Cadastro de usuários (login e senha)
+
+O login `APP_USERNAME`/`APP_PASSWORD` é o do **administrador**. Ele abre a tela
+**Usuários** (menu do topo) e cadastra outros logins e senhas, troca senhas e
+remove usuários — quem for removido perde o acesso na hora. As senhas ficam
+guardadas só como hash.
+
+No Vercel o disco é apagado a cada deploy, então os usuários precisam de um
+banco. Passo a passo:
+
+1. No painel do Vercel, abra o projeto → aba **Storage** → **Create Database**
+   → **Upstash Redis** (plano gratuito) → conecte ao projeto.
+2. O Vercel cria sozinho as variáveis `UPSTASH_REDIS_REST_URL` e
+   `UPSTASH_REDIS_REST_TOKEN` (ou `KV_REST_API_URL`/`KV_REST_API_TOKEN`).
+3. Faça um novo deploy (**Deployments → Redeploy**). A tela Usuários passa a
+   aceitar cadastros.
+
+Sem o banco, a tela avisa que não há onde guardar os usuários e o login do
+administrador continua funcionando normalmente. No seu computador não precisa
+de banco: os usuários ficam no arquivo `usuarios.json` (fora do Git).
+
 ## Limitações importantes a observar
 
 - **Tempo de execução**: o `vercel.json` está com `maxDuration: 300`

@@ -98,14 +98,9 @@ _load_dotenv()
 DEFAULT_MODEL = os.environ.get("OMNIROUTE_MODEL") or "claude-haiku-4-5"
 
 def provider():
-    """Quem le os documentos, na ordem de prioridade: "gemini" (GEMINI_API_KEY),
-    "leitor" (LEITOR_API_URL + LEITOR_API_KEY) ou "anthropic" (padrao).
-    Pra trocar de provedor, comente/descomente as linhas no .env."""
-    if gemini_client.configurado():
-        return "gemini"
-    if leitor.configurado():
-        return "leitor"
-    return "anthropic"
+    """Provedor de leitura: somente Gemini (GEMINI_API_KEY ou GOOGLE_API_KEY).
+    A Anthropic e o leitor externo ficam desativados."""
+    return "gemini"
 
 
 def make_client():

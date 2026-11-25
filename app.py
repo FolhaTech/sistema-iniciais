@@ -494,12 +494,10 @@ def usuarios_page():
 
 
 def api_key_error():
-    if pp.provider() != "anthropic":
-        return None
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
         return (
-            "A variável ANTHROPIC_API_KEY não está configurada nesta máquina. "
-            "Veja o arquivo COMO_USAR.txt para o passo a passo (é rápido, leva 2 minutos)."
+            "A variável GEMINI_API_KEY não está configurada neste servidor. "
+            "Defina-a no arquivo .env (local) ou nas Environment Variables do Vercel."
         )
     return None
 

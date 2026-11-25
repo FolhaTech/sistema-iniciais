@@ -8,6 +8,8 @@ As paginas (strings Jinja em app.py) pegam daqui o <head> (fontes + CSS) e o
 topo (marca + menu) trocando os marcadores <!--HEAD--> e <!--TOPO-->.
 """
 
+from pathlib import Path
+
 CSS_BASE = """
 :root{
   --azul-escuro:#0a0447; --azul:#192768; --azul-2:#1e295a;
@@ -113,6 +115,24 @@ TOPO = """
 """
 
 
+def _ler_versao():
+    try:
+        return (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip() or "?"
+    except OSError:
+        return "?"
+
+
+VERSAO = _ler_versao()
+
+_SELO_VERSAO = (
+    '<div style="position:fixed;right:10px;bottom:8px;z-index:9999;font:11px/1 Poppins,sans-serif;'
+    'color:#fff;background:rgba(30,40,80,.75);padding:4px 8px;border-radius:10px;pointer-events:none;">'
+    "v" + VERSAO + "</div></body>"
+)
+
+
 def aplicar(pagina):
-    """Troca os marcadores <!--HEAD--> e <!--TOPO--> da pagina pelo tema."""
-    return pagina.replace("<!--HEAD-->", HEAD).replace("<!--TOPO-->", TOPO)
+    """Troca os marcadores <!--HEAD--> e <!--TOPO--> da pagina pelo tema e
+    coloca o indicador de versao (arquivo VERSION) no canto da tela."""
+    pagina = pagina.replace("<!--HEAD-->", HEAD).replace("<!--TOPO-->", TOPO)
+    return pagina.replace("</body>", _SELO_VERSAO)

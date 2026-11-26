@@ -29,6 +29,25 @@ FONTE: os documentos recebidos estão NUMERADOS na ordem em que os fatos acontec
 está no início do nome do arquivo, que vem antes do conteúdo). Use SOMENTE esses documentos. \
 Não use conhecimento externo, não presuma nada que os documentos não mostrem.
 
+ORDEM (regra máxima): a ORDEM DOS PARÁGRAFOS segue a NUMERAÇÃO DOS DOCUMENTOS — o fato do \
+documento 1 vem antes do do documento 2, e assim por diante, até o último número. NÃO reordene \
+por data, NÃO coloque a negativa/decisão antes dos pedidos: a numeração é a ordem real dos \
+acontecimentos e prevalece sobre qualquer outra dedução. Documentos com o MESMO número (ex: \
+"1 ... email" e "1 ... whatsapp") são fatos do mesmo momento: narre-os em sequência, o mais \
+antigo (pela data) primeiro. Dentro de um mesmo documento, siga a ordem em que os eventos \
+aparecem/ocorreram.
+
+COBERTURA (regra máxima): TODO documento numerado recebido gera pelo menos UM parágrafo, e um \
+documento com vários acontecimentos distintos (ex: um WhatsApp ou e-mail com várias mensagens/\
+respostas em dias diferentes, um protocolo com andamentos, uma decisão com vários procedimentos \
+negados) gera um parágrafo para CADA acontecimento. Nenhum documento pode ficar de fora e nenhum \
+acontecimento pode ser omitido ou resumido junto de outro. Antes de responder, percorra os \
+documentos um por um, na ordem do número, e confirme que cada um aparece em "arquivo" de pelo \
+menos um item. Documentos que pareçam internos (ex: "texto estratégico", minuta, notificação \
+elaborada pelo escritório) também são fatos numerados: narre o que neles consta sobre o que foi \
+(ou será) comunicado/requerido à Requerida e a resposta recebida; só deixe de narrar o que for \
+estritamente conversa interna sem relação com a operadora, e nesse caso explique em "observacoes".
+
 PRECISÃO (regra máxima):
 - Cada afirmação deve ter base num documento. Nunca invente datas, canais, protocolos, nomes de \
 atendentes, motivos de negativa ou valores.
@@ -43,8 +62,7 @@ da operadora informa, procedimento por procedimento quando houver mais de um.
 "observacoes".
 
 ESCOPO: somente a relação entre a Requerente e a Requerida (operadora): pedidos, reenvios, ligações, \
-respostas, protocolos, junta médica, decisão, negativa, falta de resposta. Se algum documento for \
-conversa entre a cliente e o próprio escritório de advocacia, IGNORE-o. NÃO descreva quadro clínico, \
+respostas, protocolos, junta médica, decisão, negativa, falta de resposta. NÃO descreva quadro clínico, \
 comorbidades nem os laudos (isso vai em outras partes da petição) e NÃO faça argumentação jurídica: \
 apenas narre o que aconteceu.
 
@@ -64,7 +82,7 @@ sobre autorização ou negativa, narre a ausência de resposta (negativa tácita
 narre também. A negativa nunca vem antes do pedido que ela responde.
 
 Responda APENAS com JSON válido, sem markdown:
-{"fatos_lista":[{"data":"AAAA-MM-DD","texto":"..."}],
+{"fatos_lista":[{"arquivo":"nome exato do arquivo de origem","data":"AAAA-MM-DD","texto":"..."}],
  "tipo_negativa":"expressa"|"tacita"|"nao_identificada",
  "documentos_usados":["nome do arquivo", ...],
  "observacoes":"divergências ou lacunas encontradas, ou \\"\\""}
@@ -77,8 +95,12 @@ SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"data": {"type": "string"}, "texto": {"type": "string"}},
-                "required": ["data", "texto"],
+                "properties": {
+                    "arquivo": {"type": "string"},
+                    "data": {"type": "string"},
+                    "texto": {"type": "string"},
+                },
+                "required": ["arquivo", "data", "texto"],
                 "additionalProperties": False,
             },
         },
@@ -117,38 +139,101 @@ def gerar_fatos(client, model, files):
     print(f"  -> Agente de fatos: {', '.join(f.name for f in numerados)}")
 
     content = pp.build_content_blocks(numerados)
-    content[-1] = {
-        "type": "text",
-        "text": (
-            "Os documentos acima estão em ordem numérica = ordem cronológica dos fatos. "
-            "Redija a narrativa dos fatos com base SOMENTE neles, seguindo as regras."
-        ),
-    }
-    try:
-        response = pp._criar_mensagem_com_retry(
-            client,
-            model=model,
-            max_tokens=8000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
-            output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
-        )
-        texto = next(b.text for b in response.content if b.type == "text")
-        resultado = pp.extract_json_loose(texto)
-    except Exception as e:
-        print(f"     [aviso] agente de fatos falhou ({type(e).__name__}): {str(e)[:200]}")
-        return None, f"falhou ({type(e).__name__}: {str(e)[:150]}); os fatos vieram da extração geral"
+    nomes = [f.name for f in numerados]
+    instrucao = (
+        "Os documentos acima estão em ordem numérica = ordem em que os fatos aconteceram. "
+        "Redija a narrativa dos fatos com base SOMENTE neles, seguindo as regras, com os "
+        "parágrafos na ORDEM DOS NÚMEROS dos documentos e COBRINDO TODOS os documentos e "
+        "acontecimentos. Documentos recebidos (use estes nomes em \"arquivo\"): " + "; ".join(nomes) + "."
+    )
 
-    itens = [
-        {"data": (i.get("data") or "").strip(), "texto": (i.get("texto") or "").strip()}
-        for i in resultado.get("fatos_lista") or []
-        if isinstance(i, dict) and (i.get("texto") or "").strip()
-    ]
-    if not itens:
-        print("     [aviso] agente de fatos não devolveu nenhum fato; mantendo os da extração geral.")
-        return None, "não devolveu nenhum fato; os fatos vieram da extração geral"
-    resultado["fatos_lista"] = itens
-    return resultado, None
+    melhor, faltando = None, list(nomes)
+    for tentativa in (1, 2):
+        extra = ""
+        if tentativa == 2:
+            extra = (
+                " ATENÇÃO: na resposta anterior, estes documentos ficaram SEM nenhum parágrafo: "
+                + "; ".join(faltando) + ". Inclua-os agora, cada acontecimento deles em seu próprio "
+                "parágrafo, mantendo a ordem dos números."
+            )
+        msg = content[:-1] + [{"type": "text", "text": instrucao + extra}]
+        try:
+            response = pp._criar_mensagem_com_retry(
+                client,
+                model=model,
+                max_tokens=8000,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": msg}],
+                output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
+            )
+            texto = next(b.text for b in response.content if b.type == "text")
+            resultado = pp.extract_json_loose(texto)
+        except Exception as e:
+            print(f"     [aviso] agente de fatos falhou ({type(e).__name__}): {str(e)[:200]}")
+            if melhor is not None:
+                break
+            return None, f"falhou ({type(e).__name__}: {str(e)[:150]}); os fatos vieram da extração geral"
+
+        itens = _normalizar_itens(resultado.get("fatos_lista"), nomes)
+        if not itens:
+            if melhor is not None:
+                break
+            print("     [aviso] agente de fatos não devolveu nenhum fato; mantendo os da extração geral.")
+            return None, "não devolveu nenhum fato; os fatos vieram da extração geral"
+        resultado["fatos_lista"] = itens
+        cobertos = {i["arquivo"] for i in itens}
+        faltou = [n for n in nomes if n not in cobertos]
+        if melhor is None or len(faltou) < len(faltando):
+            melhor, faltando = resultado, faltou
+        if not faltando:
+            break
+
+    if faltando:
+        obs = (melhor.get("observacoes") or "").strip()
+        melhor["observacoes"] = (obs + " " if obs else "") + (
+            "Documentos numerados SEM nenhum fato narrado (conferir manualmente): " + "; ".join(faltando) + "."
+        )
+    return melhor, None
+
+
+def _chave_nome(nome):
+    """Normaliza nome de arquivo para casar o que o modelo devolveu com o real
+    (sem pasta, sem maiúsculas, espaço = underline)."""
+    base = (nome or "").replace("\\", "/").split("/")[-1].strip().lower()
+    return re.sub(r"[\s_]+", " ", base)
+
+
+def _normalizar_itens(brutos, nomes):
+    """Limpa os itens do agente e os coloca na ORDEM DOS NÚMEROS dos
+    documentos (posição em `nomes`), sem reordenar por data: a numeração dos
+    arquivos é a ordem real dos fatos. Dentro do mesmo documento mantém a ordem
+    devolvida; documentos de mesmo número ficam em sequência pela data."""
+    posicao = {_chave_nome(n): i for i, n in enumerate(nomes)}
+    numero = {_chave_nome(n): int(_NUMERADO.match(n).group(1)) for n in nomes}
+    itens, ultimo = [], 0
+    for ordem, i in enumerate(brutos or []):
+        if not isinstance(i, dict) or not (i.get("texto") or "").strip():
+            continue
+        chave = _chave_nome(i.get("arquivo"))
+        if chave in posicao:
+            pos = posicao[chave]
+        else:
+            pos = ultimo  # arquivo não reconhecido: fica junto do item anterior
+        ultimo = pos
+        nome_real = nomes[pos] if nomes else ""
+        itens.append({
+            "arquivo": nome_real if chave in posicao else "",
+            "data": (i.get("data") or "").strip(),
+            "texto": i["texto"].strip(),
+            "_pos": pos, "_num": numero.get(_chave_nome(nome_real), 0), "_ordem": ordem,
+        })
+    # mesmo número de documento: agrupa pela data do primeiro fato de cada documento
+    primeira = {}
+    for it in itens:
+        if it["data"] and it["_pos"] not in primeira:
+            primeira[it["_pos"]] = it["data"]
+    itens.sort(key=lambda it: (it["_num"], primeira.get(it["_pos"], "9999"), it["_pos"], it["_ordem"]))
+    return [{k: v for k, v in it.items() if not k.startswith("_")} for it in itens]
 
 
 def aplicar_agente_fatos(client, model, files, data):
@@ -160,6 +245,7 @@ def aplicar_agente_fatos(client, model, files, data):
         return data
     _anotar(data, "[Agente de fatos aplicado] documentos usados: " + ", ".join(resultado.get("documentos_usados") or []))
     data["fatos_lista"] = resultado["fatos_lista"]
+    data["fatos_ordem_fixa"] = True  # a petição usa esta ordem e não reordena/junta por data
     tipo = resultado.get("tipo_negativa")
     if tipo == "tacita":
         data["recebeu_negativa_formal"] = False

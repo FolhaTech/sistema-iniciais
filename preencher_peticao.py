@@ -3723,7 +3723,11 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
         elif cb_planilha.has_attr("checked"):
             del cb_planilha["checked"]
 
-    fatos = _ordenar_fatos(data.get("fatos_lista"))
+    if data.get("fatos_ordem_fixa"):
+        # agente de fatos: ordem = numeração dos documentos, sem reordenar por data
+        fatos = [i["texto"] for i in data.get("fatos_lista") or [] if isinstance(i, dict) and i.get("texto")]
+    else:
+        fatos = _ordenar_fatos(data.get("fatos_lista"))
     (filled if _insert_fatos_lista(soup, fatos) else skipped).append("fatos_lista")
 
     output_path.write_text(str(soup), encoding="utf-8")

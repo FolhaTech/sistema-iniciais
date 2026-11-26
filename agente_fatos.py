@@ -105,14 +105,15 @@ def arquivos_numerados(files):
 
 
 def gerar_fatos(client, model, files):
-    """Roda o agente. Devolve o dict do agente ({"fatos_lista": [...], ...})
-    ou None se não há documentos numerados / a chamada falhou."""
+    """Roda o agente. Devolve (resultado, motivo): resultado é o dict do agente
+    ({"fatos_lista": [...], ...}) ou None se não há documentos numerados / a
+    chamada falhou, e nesse caso motivo explica por quê (aparece na petição)."""
     import preencher_peticao as pp
 
     numerados = arquivos_numerados(files)
     if not numerados:
         print("  -> Agente de fatos: nenhum documento numerado encontrado; mantendo os fatos da extração geral.")
-        return None
+        return None, "nenhum arquivo com nome começando por número foi encontrado na pasta; os fatos vieram da extração geral"
     print(f"  -> Agente de fatos: {', '.join(f.name for f in numerados)}")
 
     content = pp.build_content_blocks(numerados)
@@ -136,7 +137,7 @@ def gerar_fatos(client, model, files):
         resultado = pp.extract_json_loose(texto)
     except Exception as e:
         print(f"     [aviso] agente de fatos falhou ({type(e).__name__}): {str(e)[:200]}")
-        return None
+        return None, f"falhou ({type(e).__name__}: {str(e)[:150]}); os fatos vieram da extração geral"
 
     itens = [
         {"data": (i.get("data") or "").strip(), "texto": (i.get("texto") or "").strip()}
@@ -145,17 +146,19 @@ def gerar_fatos(client, model, files):
     ]
     if not itens:
         print("     [aviso] agente de fatos não devolveu nenhum fato; mantendo os da extração geral.")
-        return None
+        return None, "não devolveu nenhum fato; os fatos vieram da extração geral"
     resultado["fatos_lista"] = itens
-    return resultado
+    return resultado, None
 
 
 def aplicar_agente_fatos(client, model, files, data):
     """Substitui data["fatos_lista"] pelo resultado do agente (in-place).
     Devolve `data`; as observações do agente vão para observacoes_divergencias."""
-    resultado = gerar_fatos(client, model, files)
+    resultado, motivo = gerar_fatos(client, model, files)
     if not resultado:
+        _anotar(data, "[Agente de fatos NÃO aplicado] " + motivo)
         return data
+    _anotar(data, "[Agente de fatos aplicado] documentos usados: " + ", ".join(resultado.get("documentos_usados") or []))
     data["fatos_lista"] = resultado["fatos_lista"]
     tipo = resultado.get("tipo_negativa")
     if tipo == "tacita":
@@ -164,6 +167,10 @@ def aplicar_agente_fatos(client, model, files, data):
         data["recebeu_negativa_formal"] = True
     obs = (resultado.get("observacoes") or "").strip()
     if obs:
-        atual = (data.get("observacoes_divergencias") or "").strip()
-        data["observacoes_divergencias"] = (atual + "\n" if atual else "") + "[Fatos] " + obs
+        _anotar(data, "[Fatos] " + obs)
     return data
+
+
+def _anotar(data, texto):
+    atual = (data.get("observacoes_divergencias") or "").strip()
+    data["observacoes_divergencias"] = (atual + "\n" if atual else "") + texto

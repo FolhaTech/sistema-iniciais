@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 import preencher_peticao as pp
 import sharepoint_client as sp
+import agente_fatos
 import ui_tema
 import usuarios
 
@@ -584,6 +585,7 @@ def processar():
 
         data, _ = pp.merge_results(all_results)
         pp.completar_dados_operadora(client, model, files, data)
+        agente_fatos.aplicar_agente_fatos(client, model, files, data)
 
         nome_cliente = data.get("cliente_nome_completo") or client_folder_name
         output_path = OUTPUT_DIR / f"Petição Inicial - {nome_cliente}.html"

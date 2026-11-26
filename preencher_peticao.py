@@ -3800,6 +3800,8 @@ def main():
 
     data, conflicts = merge_results(all_results)
     completar_dados_operadora(client, args.model, files, data)
+    import agente_fatos
+    agente_fatos.aplicar_agente_fatos(client, args.model, files, data)
 
     output_path = Path(args.output).resolve() if args.output else folder / f"Petição Inicial - {folder.name}.html"
     output_path = unique_output_path(output_path)

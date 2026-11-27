@@ -79,11 +79,24 @@ NEGATIVA: o último(s) parágrafo(s) devem narrar o desfecho. Se houve resposta 
 narre a negativa (data, canal, motivos, normas citadas). Se NÃO houve resposta formal da operadora \
 sobre autorização ou negativa, narre a ausência de resposta (negativa tácita), indicando a data do \
 último contato e que a operadora permaneceu inerte. Se a operadora autorizou algum procedimento, \
-narre também. A negativa nunca vem antes do pedido que ela responde.
+narre também. A negativa nunca vem antes do pedido que ela responde. "tipo_negativa": "expressa" = \
+TODOS os procedimentos foram negados por escrito (carta/termo/e-mail); "parcial" = alguns foram \
+negados por escrito mas outros só verbalmente (ex: informados na consulta/ligação) ou sem resposta \
+formal — nesse caso narre o que foi negado por escrito e, em parágrafo próprio, que quanto aos demais \
+a operadora não formalizou a negativa e que, mesmo após novo contato/protocolo, não houve retorno; \
+"tacita" = nenhuma resposta formal; "nao_identificada" = não dá para saber.
+
+NÃO SÃO FATOS (não narre): laudos e relatórios médicos/psicológicos/nutricionais, receitas, \
+orçamentos de hospital e exames. Eles descrevem o quadro clínico e vão em outra parte da petição. \
+Só os cite, em uma frase, se foram anexados ao pedido feito à operadora ("instruindo o pedido com o \
+relatório médico"), sem descrever o conteúdo clínico nem a data de emissão. Consultas/perícias que a \
+operadora EXIGIU da Requerente (ex: comparecer a consulta com médico credenciado) são fatos, mesmo \
+sem data: narre-as "Em seguida, a Requerida solicitou que a Requerente comparecesse..." logo depois \
+do pedido, e o resultado da consulta no ponto cronológico em que ocorreu.
 
 Responda APENAS com JSON válido, sem markdown:
 {"fatos_lista":[{"arquivo":"nome exato do arquivo de origem","data":"AAAA-MM-DD","texto":"..."}],
- "tipo_negativa":"expressa"|"tacita"|"nao_identificada",
+ "tipo_negativa":"expressa"|"parcial"|"tacita"|"nao_identificada",
  "documentos_usados":["nome do arquivo", ...],
  "observacoes":"divergências ou lacunas encontradas, ou \\"\\""}
 """
@@ -104,7 +117,7 @@ SCHEMA = {
                 "additionalProperties": False,
             },
         },
-        "tipo_negativa": {"type": "string", "enum": ["expressa", "tacita", "nao_identificada"]},
+        "tipo_negativa": {"type": "string", "enum": ["expressa", "parcial", "tacita", "nao_identificada"]},
         "documentos_usados": {"type": "array", "items": {"type": "string"}},
         "observacoes": {"type": "string"},
     },
@@ -247,7 +260,10 @@ def aplicar_agente_fatos(client, model, files, data):
     data["fatos_lista"] = resultado["fatos_lista"]
     data["fatos_ordem_fixa"] = True  # a petição usa esta ordem e não reordena/junta por data
     tipo = resultado.get("tipo_negativa")
-    if tipo == "tacita":
+    # Só "expressa" (TODOS os procedimentos negados por escrito) esconde o bloco
+    # da RN 623/24 sobre o dever de informar a negativa; tácita ou parcial
+    # (parte negada por escrito, parte sem resposta formal) mantém o bloco.
+    if tipo in ("tacita", "parcial"):
         data["recebeu_negativa_formal"] = False
     elif tipo == "expressa":
         data["recebeu_negativa_formal"] = True

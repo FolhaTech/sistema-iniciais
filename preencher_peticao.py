@@ -338,6 +338,7 @@ SCHEMA_PROPERTIES = {
     "comorbidades_fisicas_1": _nullable_string(),
     "comorbidades_fisicas_2": _nullable_string(),
     "comorbidades_psicologicas": _nullable_string(),
+    "outros_laudos_paragrafo": _nullable_string(),
     "menciona_lipedema": _nullable_bool(),
     "lipedema_paragrafo_1": _nullable_string(),
     "lipedema_paragrafo_2": _nullable_string(),
@@ -583,19 +584,37 @@ subcutâneas em região cervical, torácica, lombar, sacral, glútea, braquial, 
 bilateralmente."
 
 - comorbidades_fisicas_2 (impacto funcional/higiênico da flacidez, com base no laudo do \
-cirurgião): "apresenta flacidez cutânea excessiva, que evolui constantemente com quadros de \
+cirurgião): "Além disso, a Requerente apresenta flacidez cutânea excessiva, que evolui constantemente com quadros de \
 intertrigo e celulites bacterianas nas dobras cutâneas, especialmente nos sulcos mamários, \
 região suprapúbica, axilas, sulcos glúteos e regiões crurais. Relata significativa \
 dificuldade para realização do asseio e da higiene íntima, bem como queixas de mau odor \
 decorrente da sudorese excessiva e do atrito entre as dobras cutâneas, necessitando do uso \
 contínuo de cremes, pomadas, antissépticos e desodorantes corporais."
 
-- comorbidades_psicologicas (impacto emocional, com base no laudo psicológico): "a \
-Requerente encontra-se em acompanhamento psicológico especializado, diante dos relevantes \
+- comorbidades_psicologicas (impacto emocional, com base no laudo psicológico): "Ressalte-se, \
+ainda, que a Requerente encontra-se em acompanhamento psicológico especializado, diante dos relevantes \
 prejuízos emocionais decorrentes das sequelas pós-bariátricas, apresentando baixa \
 autoestima, insatisfação com a própria imagem corporal, perda do interesse pelo convívio \
 social e comprometimento das relações íntimas, sociais e laborais em razão do dismorfismo \
 corporal ocasionado pela expressiva perda de peso."
+
+- outros_laudos_paragrafo (OUTROS laudos médicos da pasta, além do laudo do cirurgião plástico e \
+do laudo psicológico): se a pasta tiver laudos/relatórios de OUTROS profissionais — dermatologista, \
+cirurgião bariátrico, endocrinologista, nutricionista, psiquiatra, cardiologista etc. —, escreva UM \
+parágrafo completo (ou dois, separados por uma linha em branco) que incorpore o que cada um desses \
+laudos realmente diz sobre a paciente, citando a fonte no fim de cada ideia no formato "conforme \
+laudo do(a) [especialidade] Dr(a). NOME COMPLETO (CRM/CRN número/UF)". Exemplos do tipo de \
+conteúdo: lesões de pele e tratamento clínico ineficaz (dermatologista); queixas e comprometimento \
+do sono (bariátrico/psiquiatra); condição metabólica controlada, sem contraindicação cirúrgica \
+(endocrinologista); bom estado nutricional e aptidão para a cirurgia (nutricionista). Use SOMENTE \
+o que o laudo de cada profissional escreve — nunca atribua a um laudo algo que está em outro e \
+nunca invente achado, nome ou número de conselho. NÃO repita o que já está em comorbidades_fisicas_1/2 \
+ou comorbidades_psicologicas. Se não houver nenhum outro laudo na pasta, devolva "".
+
+FORMATO: comorbidades_fisicas_2 e comorbidades_psicologicas são PARÁGRAFOS COMPLETOS e \
+independentes na petição: comecem com letra maiúscula, tenham sujeito explícito ("a Requerente") \
+e terminem com ponto final — NUNCA devolva um fragmento começando em minúscula ou só com o \
+verbo ("apresenta grande flacidez...").
 
 ATENÇÃO: os três exemplos acima estão completos, por extenso, de propósito — NENHUM deles tem \
 reticências ou corte no meio. Isso é intencional: eles mostram não só o TOM, mas também o NÍVEL \
@@ -841,7 +860,12 @@ procedimento incomum, transcreva exatamente esse nome); (4) use a nomenclatura E
 para cada procedimento (não troque por sinônimo nem padronize para um termo "mais correto" que \
 você conheça); (5) antes de finalizar, releia o laudo procedimento por procedimento, do \
 primeiro ao último, e confira cada um contra o array — inclusive os últimos itens da lista do \
-laudo, que são os que mais costumam ficar de fora.
+laudo, que são os que mais costumam ficar de fora; (6) NUNCA repita um procedimento: não \
+coloque no array um item GENÉRICO que apenas resume ou repete os específicos já listados (ex: \
+"Cirurgia reparadora em região de abdome e mamas" depois de abdominoplastia e mastopexia, ou \
+"demais procedimentos necessários") — esse tipo de frase do laudo é só uma descrição geral e \
+NÃO é um item; o mesmo procedimento escrito duas vezes (com outras palavras) entra UMA vez só, \
+com a descrição mais completa.
 
 - peso_perdido_kg: apenas o número + "quilos", ex: "39 quilos". FONTE OBRIGATÓRIA: use \
 EXCLUSIVAMENTE o laudo do cirurgião plástico (o documento que descreve o histórico de peso da \
@@ -2223,8 +2247,8 @@ def build_qualificacao_partes(d):
     rg = d.get("cliente_rg") or "(RG NÃO ENCONTRADO)"
     cpf = d.get("cliente_cpf") or "(CPF NÃO ENCONTRADO)"
     texto += (
-        f", portador(a) da cédula de identidade RG Nº {rg}, regularmente "
-        f"inscrito(a) no C.P.F sob o Nº {cpf}"
+        f", portadora da cédula de identidade RG Nº {rg}, regularmente "
+        f"inscrita no C.P.F sob o Nº {cpf}"
     )
 
     logradouro = d.get("cliente_endereco_logradouro") or "(ENDEREÇO NÃO ENCONTRADO)"
@@ -2235,7 +2259,7 @@ def build_qualificacao_partes(d):
     uf = d.get("cliente_uf") or "(UF)"
     cep = d.get("cliente_cep") or "(CEP NÃO ENCONTRADO)"
 
-    endereco = f"residente e domiciliado(a) na {logradouro}, Nº {numero}"
+    endereco = f"residente e domiciliada na {logradouro}, Nº {numero}"
     if complemento:
         endereco += f", {complemento}"
     endereco += f", bairro {bairro}, {cidade}/{uf}, CEP: {cep}"
@@ -2291,6 +2315,47 @@ def _so_primeira_maiuscula(texto):
         else:
             resultado.append(baixa[0].upper() + baixa[1:])
     return " ".join(resultado)
+
+
+def _sem_frases_repetidas(texto):
+    """Tira frases idênticas repetidas dentro do mesmo texto (a IA às vezes
+    devolve a frase final do modelo duas vezes: "Resumidamente, a Requerente
+    necessita ser tratada... Resumidamente, a Requerente necessita...")."""
+    if not texto:
+        return texto
+    partes = re.split(r"(?<=[.!?])\s+", texto.strip())
+    vistos, saida = set(), []
+    for parte in partes:
+        chave = re.sub(r"\W+", " ", _normalize_text(parte)).strip().lower()
+        if len(chave) > 25 and chave in vistos:
+            continue
+        vistos.add(chave)
+        saida.append(parte)
+    return " ".join(saida)
+
+
+def _nome_requerida(nome):
+    """Razão social da Requerida em CAIXA ALTA, como na petição final do
+    escritório ("NOTRE DAME INTERMEDICA SAUDE S.A"); "SA" solto vira "S.A"."""
+    nome = (nome or "").strip()
+    if not nome:
+        return nome
+    nome = re.sub(r"\bS\.?/?A\.?$", "S.A", nome.upper())
+    return nome
+
+
+_TIPOS_LOGRADOURO_RE = re.compile(
+    r"^(rua|r\.?|avenida|av\.?|alameda|al\.?|rodovia|rod\.?|pra[çc]a|pç\.?|travessa|tv\.?|estrada|"
+    r"est\.?|largo|viela|via|vila|ladeira|parque|beco|viaduto|marginal)\b",
+    re.IGNORECASE,
+)
+
+
+def _logradouro_requerida(logradouro):
+    """O modelo já traz "com sede na Rua " antes do campo: se o logradouro
+    veio com o tipo ("Avenida Paulista"), o campo leva o tipo e o "Rua " do
+    modelo é removido na hora de preencher (ver fill_template)."""
+    return _so_primeira_maiuscula(logradouro)
 
 
 def set_field_text(elem, text):
@@ -2974,6 +3039,18 @@ _DOCX_BODY_SIZE_PT = 13
 _DOCX_QUOTE_SIZE_PT = 11
 _DOCX_FN_SIZE_PT = 11
 _DOCX_CAPTION_SIZE_PT = 9
+# Padrao observado na petição final do escritório (ajustada à mão no Word):
+# texto JUSTIFICADO, recuo de 1ª linha de 5 cm e UMA LINHA EM BRANCO entre
+# parágrafos (parágrafo vazio de verdade, como o advogado faz), 16 linhas em
+# branco depois do endereçamento ao juízo e 3 antes/depois do título da ação.
+_DOCX_RECUO_PRIMEIRA_LINHA_CM = 5.0
+_DOCX_LINHAS_APOS_ENDERECAMENTO = 16
+_DOCX_LINHAS_ENTRE_QUALIFICACAO_E_TITULO = 3
+# Tamanho máximo das imagens dos laudos (o robô às vezes só consegue a página
+# inteira): sem isso a página do laudo ocupava a folha toda no Word.
+_DOCX_IMG_MAX_LARGURA_CM = 13.5
+_DOCX_IMG_MAX_ALTURA_CM = 10.0
+_DOCX_IMG_MAX_ALTURA_PAGINA_CM = 15.0
 
 
 def _docx_add_runs(paragraph, node, bold=False, italic=False, underline=False, size_pt=None, notas_ids=None):
@@ -3056,13 +3133,62 @@ def _docx_insert_picture(doc, img_tag, largura_cropada, largura_full_page):
     par.alignment = WD_ALIGN_PARAGRAPH.CENTER
     par.paragraph_format.first_line_indent = 0
     classes = img_tag.get("class") or []
-    largura = largura_full_page if "full-page" in classes else largura_cropada
+    pagina_inteira = "full-page" in classes
+    dados, proporcao = _docx_aparar_imagem(dados)
+    if proporcao:
+        # cabe em largura E altura máximas, mantendo a proporção
+        max_h = Cm(_DOCX_IMG_MAX_ALTURA_PAGINA_CM if pagina_inteira else _DOCX_IMG_MAX_ALTURA_CM)
+        max_w = Cm(_DOCX_IMG_MAX_LARGURA_CM)
+        largura = int(min(max_w, max_h / proporcao))
+    else:
+        largura = largura_full_page if pagina_inteira else largura_cropada
     run = par.add_run()
     try:
         run.add_picture(io.BytesIO(dados), width=largura)
     except Exception:
         return False
+    _docx_linha_em_branco(doc)
     return True
+
+
+def _docx_linha_em_branco(doc, n=1):
+    """Parágrafo vazio, igual ao que o advogado digita à mão entre parágrafos."""
+    for _ in range(n):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.first_line_indent = 0
+
+
+def _docx_aparar_imagem(dados):
+    """Tira as bordas brancas da imagem (a página do laudo vem com margem
+    grande) e devolve (bytes, altura/largura). Se algo falhar devolve
+    (dados originais, None)."""
+    try:
+        from PIL import Image, ImageChops
+
+        img = Image.open(io.BytesIO(dados))
+        img.load()
+        rgb = img.convert("RGB")
+        fundo = Image.new("RGB", rgb.size, (255, 255, 255))
+        diff = ImageChops.difference(rgb, fundo).convert("L").point(lambda v: 255 if v > 24 else 0)
+        caixa = diff.getbbox()
+        if caixa:
+            pad = max(6, int(min(rgb.size) * 0.01))
+            caixa = (
+                max(0, caixa[0] - pad), max(0, caixa[1] - pad),
+                min(rgb.size[0], caixa[2] + pad), min(rgb.size[1], caixa[3] + pad),
+            )
+            # só corta se sobrar uma área relevante (evita cortar imagem quase vazia)
+            if (caixa[2] - caixa[0]) > rgb.size[0] * 0.2 and (caixa[3] - caixa[1]) > rgb.size[1] * 0.2:
+                img = img.crop(caixa)
+        saida = io.BytesIO()
+        fmt = "PNG" if (img.format or "").upper() == "PNG" or img.mode in ("RGBA", "P") else "JPEG"
+        if fmt == "JPEG" and img.mode != "RGB":
+            img = img.convert("RGB")
+        img.save(saida, format=fmt, **({"quality": 90} if fmt == "JPEG" else {}))
+        return saida.getvalue(), img.size[1] / img.size[0]
+    except Exception:
+        return dados, None
 
 
 def _docx_insert_doc_photo(doc, div, largura_cropada, largura_full_page):
@@ -3071,15 +3197,7 @@ def _docx_insert_doc_photo(doc, div, largura_cropada, largura_full_page):
         return
     if not _docx_insert_picture(doc, img, largura_cropada, largura_full_page):
         return
-    legenda = div.find("p", class_="doc-photo-caption")
-    if legenda is not None:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p.paragraph_format.first_line_indent = 0
-        p.paragraph_format.space_after = Pt(10)
-        run = p.add_run(legenda.get_text())
-        run.italic = True
-        run.font.size = Pt(_DOCX_CAPTION_SIZE_PT)
+    # sem legenda: na petição final do escritório as imagens entram sozinhas
 
 
 def _docx_insert_doc_photos_row(doc, row, largura_coluna):
@@ -3107,13 +3225,6 @@ def _docx_insert_doc_photos_row(doc, row, largura_coluna):
             run.add_picture(io.BytesIO(dados), width=largura_coluna)
         except Exception:
             continue
-        legenda = foto.find("p", class_="doc-photo-caption")
-        if legenda is not None:
-            pc = cell.add_paragraph()
-            pc.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            rc = pc.add_run(legenda.get_text())
-            rc.italic = True
-            rc.font.size = Pt(_DOCX_CAPTION_SIZE_PT)
     # linha em branco depois da tabela, pra nao colar o proximo paragrafo nela
     doc.add_paragraph()
 
@@ -3162,16 +3273,32 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page, notas_ids=N
         p.paragraph_format.first_line_indent = 0
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
-        if nome == "h2":
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if nome == "h2" else WD_ALIGN_PARAGRAPH.JUSTIFY
         _docx_add_runs(p, tag, notas_ids=notas_ids)
+        # título da ação: 3 linhas em branco depois; demais títulos: 1
+        _docx_linha_em_branco(doc, _DOCX_LINHAS_ENTRE_QUALIFICACAO_E_TITULO if nome == "h2" else 1)
         return
 
     if nome == "p":
+        texto = tag.get_text(" ", strip=True)
+        centralizado = "closing-block" in classes or texto.startswith("Dá-se à causa")
+        qualificacao = tag.find(attrs={"data-field": "qualificacao_requerente"}) is not None
         p = doc.add_paragraph()
-        p.paragraph_format.first_line_indent = 0 if "noindent" in classes else Cm(4.75)
+        p.paragraph_format.first_line_indent = (
+            0 if (("noindent" in classes and not qualificacao) or centralizado)
+            else Cm(_DOCX_RECUO_PRIMEIRA_LINHA_CM)
+        )
         p.paragraph_format.space_after = Pt(0)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if centralizado else WD_ALIGN_PARAGRAPH.JUSTIFY
         _docx_add_runs(p, tag, notas_ids=notas_ids)
+        if texto.startswith("EXCELENTÍSSIMO"):
+            _docx_linha_em_branco(doc, _DOCX_LINHAS_APOS_ENDERECAMENTO)
+        elif qualificacao:
+            _docx_linha_em_branco(doc, _DOCX_LINHAS_ENTRE_QUALIFICACAO_E_TITULO)
+        elif texto.startswith("Contra "):
+            pass  # na petição final o título "I) - DA GRATUIDADE" vem logo depois
+        else:
+            _docx_linha_em_branco(doc)
         return
 
     if nome == "blockquote":
@@ -3179,7 +3306,9 @@ def _docx_render_block(doc, tag, largura_cropada, largura_full_page, notas_ids=N
         p.paragraph_format.left_indent = Cm(5)
         p.paragraph_format.first_line_indent = 0
         p.paragraph_format.space_after = Pt(0)
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         _docx_add_runs(p, tag, size_pt=_DOCX_QUOTE_SIZE_PT, notas_ids=notas_ids)
+        _docx_linha_em_branco(doc)
         return
 
     # tag solta nao mapeada (ex: tabela colada de outro lugar) -- melhor
@@ -3490,6 +3619,43 @@ def _limpar_item_procedimento(item):
     return item
 
 
+def _sem_acento_minusculo(texto):
+    return _normalize_text(texto or "").lower()
+
+
+_PROCEDIMENTO_GENERICO_RE = re.compile(
+    r"^(demais|outros|todos os|cirurgias? (plasticas? )?reparadoras?|procedimentos? (cirurgicos? )?reparadores?)\b"
+)
+
+
+def _remover_procedimentos_repetidos(itens):
+    """Tira da lista de procedimentos (a) itens idênticos, (b) itens
+    contidos em outro mais completo ("Mastopexia" x "Mastopexia com prótese")
+    e (c) frases genéricas que só repetem os específicos ("Cirurgia
+    reparadora em região de abdome e mamas") -- problema visto na petição
+    gerada: o laudo traz essa frase geral e ela virava um procedimento
+    repetido. A ordem original é mantida."""
+    limpos = [i for i in itens if i]
+    if len(limpos) < 2:
+        return limpos
+    norm = [re.sub(r"\s+", " ", _sem_acento_minusculo(i)).strip(" .;") for i in limpos]
+    manter = []
+    for idx, (item, n) in enumerate(zip(limpos, norm)):
+        if _PROCEDIMENTO_GENERICO_RE.match(n):
+            continue
+        repetido = False
+        for j, outro in enumerate(norm):
+            if j == idx:
+                continue
+            if n == outro and j < idx:
+                repetido = True  # idêntico a um anterior
+            elif n != outro and len(n) >= 6 and n in outro:
+                repetido = True  # contido num item mais completo
+        if not repetido:
+            manter.append(item)
+    return manter or limpos
+
+
 def _formatar_procedimentos(lista):
     """procedimentos_lista vem da IA como array (um item por procedimento,
     sem numeracao) -- aqui vira o texto corrido numerado em algarismos
@@ -3497,6 +3663,7 @@ def _formatar_procedimentos(lista):
     if not lista:
         return None
     itens = []
+    lista = _remover_procedimentos_repetidos([_limpar_item_procedimento(i) for i in lista])
     for idx, item in enumerate(lista):
         item = _limpar_item_procedimento(item)
         if not item:
@@ -3612,29 +3779,30 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
         "comarca_foro": resolve_comarca_foro(data),
         "email_requerente": data.get("cliente_email"),
         "cliente_idade": data.get("cliente_idade"),
-        "requerida_nome": _so_primeira_maiuscula(data.get("operadora_nome")),
+        "requerida_nome": _nome_requerida(data.get("operadora_nome")),
         "requerida_cnpj": data.get("operadora_cnpj"),
-        "requerida_logradouro": _so_primeira_maiuscula(data.get("operadora_logradouro")),
+        "requerida_logradouro": _logradouro_requerida(data.get("operadora_logradouro")),
         "requerida_numero": data.get("operadora_numero"),
         "requerida_bairro": _so_primeira_maiuscula(data.get("operadora_bairro")),
         "requerida_cidade": _so_primeira_maiuscula(data.get("operadora_cidade")),
         "requerida_uf": data.get("operadora_uf"),
         "requerida_cep": data.get("operadora_cep"),
-        "requerida_email": data.get("operadora_email"),
+        "requerida_email": (data.get("operadora_email") or "").strip().lower() or data.get("operadora_email"),
         "carteirinha_numero": data.get("carteirinha_numero"),
         "nome_plano_autogestao": data.get("plano_nome_autogestao"),
         "peso_perdido": data.get("peso_perdido_kg"),
-        "comorbidades_1": data.get("comorbidades_fisicas_1"),
-        "comorbidades_2": data.get("comorbidades_fisicas_2"),
-        "comorbidades_psicologicas": data.get("comorbidades_psicologicas"),
+        "comorbidades_1": _sem_frases_repetidas(data.get("comorbidades_fisicas_1")),
+        "comorbidades_2": _sem_frases_repetidas(data.get("comorbidades_fisicas_2")),
+        "comorbidades_psicologicas": _sem_frases_repetidas(data.get("comorbidades_psicologicas")),
+        "outros_laudos": data.get("outros_laudos_paragrafo"),
         "lipedema_1": data.get("lipedema_paragrafo_1"),
         "lipedema_2": data.get("lipedema_paragrafo_2"),
         "medico_nome_crm": data.get("medico_nome_crm"),
         "procedimentos": _formatar_procedimentos(data.get("procedimentos_lista")),
         "psicologa_nome_crp": data.get("psicologa_nome_crp"),
-        "danos_psicologicos": data.get("danos_psicologicos_paragrafo"),
-        "danos_morais_laudo_1": data.get("danos_morais_laudo_1"),
-        "danos_morais_laudo_2": data.get("danos_morais_laudo_2"),
+        "danos_psicologicos": _sem_frases_repetidas(data.get("danos_psicologicos_paragrafo")),
+        "danos_morais_laudo_1": _sem_frases_repetidas(data.get("danos_morais_laudo_1")),
+        "danos_morais_laudo_2": _sem_frases_repetidas(data.get("danos_morais_laudo_2")),
         "danos_morais_relacao": data.get("danos_morais_relacao"),
         "gratuidade_documentos": _formatar_lista_documentos(data.get("gratuidade_documentos_lista")),
         "gratuidade_renda_mensal": data.get("gratuidade_renda_mensal"),
@@ -3671,6 +3839,28 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
 
     for field_name, value in field_values.items():
         spans = soup.select(f'[data-field="{field_name}"]')
+        if field_name == "outros_laudos":
+            # opcional: sem outros laudos na pasta, o parágrafo inteiro sai
+            if not (value or "").strip():
+                for span in spans:
+                    alvo = span.find_parent("p") or span
+                    alvo.decompose()
+                continue
+            partes = [t.strip() for t in re.split(r"\n\s*\n", value.strip()) if t.strip()]
+            for span in spans:
+                span["class"] = ["fill"]
+                set_field_text(span, partes[0])
+                pai = span.find_parent("p")
+                for extra in partes[1:]:
+                    novo = soup.new_tag("p")
+                    sp = soup.new_tag("span")
+                    sp["class"] = ["fill"]
+                    sp["contenteditable"] = "true"
+                    sp.string = extra
+                    novo.append(sp)
+                    (pai or span).insert_after(novo)
+            filled.append(field_name)
+            continue
         if not value:
             skipped.append(field_name)
             hint = _BLANK_HINTS.get(field_name, _BLANK_HINT_PADRAO)
@@ -3683,6 +3873,14 @@ def fill_template(template_path: Path, output_path: Path, data: dict, files=None
                 span["class"] = ["fill"]
             set_field_text(span, value)
         filled.append(field_name)
+
+    # "com sede na Rua <logradouro>": se o logradouro já traz o tipo (Avenida,
+    # Alameda, Rodovia...), o "Rua " fixo do modelo sai ("Rua Avenida Paulista").
+    for span in soup.select('[data-field="requerida_logradouro"]'):
+        if _TIPOS_LOGRADOURO_RE.match(span.get_text().strip()):
+            anterior = span.previous_sibling
+            if isinstance(anterior, NavigableString) and str(anterior).endswith("Rua "):
+                anterior.replace_with(str(anterior)[: -len("Rua ")])
 
     checkbox_map = {
         "cond-gratuidade": data.get("tem_declaracao_gratuidade"),
